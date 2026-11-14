@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-11-14
 
+### Added
+- (2026-11-14) Add Open-Meteo current/15-minute, hourly, and daily weather modes through `GET /api/v1/weather`, with dashboard resolution tabs and mode contract tests.
+
 ### Changed
 - (2026-11-14) Scoped PLAN.md down to a software-only autonomous grid carbon optimizer; IoT/MQTT/hardware, auth, frontend, Postgres/Redis deferred.
 - (2026-11-14) Recorded that PLAN.md was not present in the repository; used the requested prompt scope as the implementation source of truth and kept the API in the existing `backend/` project.

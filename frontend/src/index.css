@@ -12,11 +12,24 @@
   --line: #e8ece5;
   --green: #2e7754;
   --deep-green: #174c37;
+  --page-bg: #f5f7f2;
   --mono: 'DM Mono', monospace;
 }
 
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  color: #e3ebe4;
+  background: #111713;
+  --ink: #e3ebe4;
+  --muted: #9aa99d;
+  --line: #2a382e;
+  --green: #82c796;
+  --deep-green: #b7dec0;
+  --page-bg: #111713;
+}
+
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 360px; min-height: 100vh; }
+body { margin: 0; min-width: 360px; min-height: 100vh; background: var(--page-bg); }
 button, a { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, a:focus-visible { outline: 2px solid #3e8d65; outline-offset: 3px; }

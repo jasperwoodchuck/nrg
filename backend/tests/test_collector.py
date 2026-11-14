@@ -46,6 +46,7 @@ class MockClient:
 def sample_payload(times=None):
     times = times or ["2026-01-01T12:00", "2026-01-01T13:00"]
     return {
+        "timezone": settings.timezone,
         "hourly": {
             "time": times,
             "temperature_2m": [25.0] * len(times),
@@ -53,7 +54,10 @@ def sample_payload(times=None):
             "wind_speed_80m": [3.0] * len(times),
             "shortwave_radiation": [500.0] * len(times),
             "precipitation": [0.0] * len(times),
-        }
+        },
+        "current": {"time": times[0], "temperature_2m": 25.0, "cloud_cover": 20.0, "wind_speed_80m": 3.0, "shortwave_radiation": 500.0, "precipitation": 0.0},
+        "minutely_15": {"time": [times[0]], "temperature_2m": [25.0], "precipitation": [0.0], "wind_speed_80m": [3.0], "shortwave_radiation": [500.0]},
+        "daily": {"time": [times[0][:10]], "temperature_2m_mean": [25.0], "temperature_2m_max": [25.0], "temperature_2m_min": [25.0], "precipitation_sum": [0.0], "wind_speed_10m_max": [3.0], "shortwave_radiation_sum": [500.0]},
     }
 
 
@@ -71,6 +75,10 @@ def test_live_request_uses_open_meteo_parameters_and_caches_source(db_session):
                 "latitude": settings.latitude,
                 "longitude": settings.longitude,
                 "hourly": VARS,
+                "current": open_meteo.CURRENT_VARS,
+                "minutely_15": open_meteo.MINUTELY_15_VARS,
+                "daily": open_meteo.DAILY_VARS,
+                "forecast_minutely_15": 96,
                 "forecast_days": 3,
                 "timezone": settings.timezone,
                 "wind_speed_unit": "ms",

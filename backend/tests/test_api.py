@@ -11,8 +11,8 @@ from pydantic import ValidationError
 from app.collectors.open_meteo import collect_weather
 from app.main import app, http_error_handler, validation_error_handler, update_location, get_location
 from app.core.config import settings
-from app.db.models import ForecastRecord, VirtualLoad, AppState
-from app.modules.energy.location import LocationInput, LOCATION_STATE_KEY, restore_location
+from app.db.models import CacheRecord, ForecastRecord, VirtualLoad, AppState
+from app.modules.energy.location import LocationInput, LOCATION_STATE_KEY, restore_location, weather_cache_key
 from test_collector import MockClient, MockResponse, sample_payload
 
 
@@ -22,6 +22,7 @@ def test_read_api_contracts_and_error_envelope(api_db_session):
         "/api/v1/impact/summary?range=24h",
         "/api/v1/impact/metrics/{key}",
         "/api/v1/forecast",
+        "/api/v1/weather",
         "/api/v1/schedule",
         "/api/v1/loads",
         "/api/v1/insights",
@@ -41,6 +42,7 @@ def test_read_api_contracts_and_error_envelope(api_db_session):
         ("/api/v1/impact/summary", {"range": "24h", "session": api_db_session}),
         *( ("/api/v1/impact/metrics/{key}", {"key": key, "range": "24h", "session": api_db_session}) for key in ("co2_saved", "co2_saved_baseline_b", "kwh_shifted", "loads_optimized") ),
         ("/api/v1/forecast", {"session": api_db_session}),
+        ("/api/v1/weather", {"mode": "hourly", "session": api_db_session}),
         ("/api/v1/schedule", {"session": api_db_session}),
         ("/api/v1/loads", {"session": api_db_session}),
         ("/api/v1/insights", {"session": api_db_session}),
@@ -63,6 +65,8 @@ def test_read_api_contracts_and_error_envelope(api_db_session):
     assert "http://localhost:5173" in middleware.kwargs["allow_origins"]
 
 def test_open_meteo_data_flows_through_forecast_endpoint(api_db_session):
+    api_db_session.query(ForecastRecord).delete()
+    api_db_session.commit()
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     local_times = [
         (now + timedelta(hours=offset)).astimezone(ZoneInfo(settings.timezone)).strftime("%Y-%m-%dT%H:%M")
@@ -79,6 +83,41 @@ def test_open_meteo_data_flows_through_forecast_endpoint(api_db_session):
     assert body["forecast"][0]["weather"]["temperature_2m"] == 25.0
     assert body["forecast"][0]["source"] == "ESTIMATED"
     assert "intensity_gco2_kwh" in body["forecast"][0]
+
+
+def test_weather_endpoint_returns_each_cached_open_meteo_resolution(api_db_session):
+    collect_weather(api_db_session, MockClient([MockResponse(sample_payload())]))
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/api/v1/weather")
+    for mode, resolution in (("realtime", "15-minute"), ("hourly", "hourly"), ("daily", "daily")):
+        result = route.endpoint(mode=mode, session=api_db_session)
+        assert result["mode"] == mode
+        assert result["resolution"] == resolution
+        assert result["source"] == "LIVE"
+        assert result["data"]
+        assert result["data"][0]["values"]
+
+
+def test_weather_endpoint_derives_missing_modes_from_cached_hourly_data(api_db_session):
+    hourly_only = sample_payload()
+    hourly_only.pop("current")
+    hourly_only.pop("minutely_15")
+    hourly_only.pop("daily")
+    cache_source = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
+    api_db_session.add(CacheRecord(source=cache_source, payload=json.dumps(hourly_only), fetched_at=datetime.now(timezone.utc)))
+    previous_mode = api_db_session.get(AppState, f"last_weather_mode:{cache_source}")
+    if previous_mode:
+        api_db_session.delete(previous_mode)
+    api_db_session.commit()
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/api/v1/weather")
+
+    realtime = route.endpoint(mode="realtime", session=api_db_session)
+    daily = route.endpoint(mode="daily", session=api_db_session)
+
+    assert realtime["resolution"] == "hourly"
+    assert realtime["source"] == "CACHED"
+    assert realtime["data"]
+    assert daily["source"] == "ESTIMATED"
+    assert daily["data"][0]["values"]["temperature_2m_mean"] == 25
 
 
 def test_only_location_and_simulator_control_routes_write(api_db_session):

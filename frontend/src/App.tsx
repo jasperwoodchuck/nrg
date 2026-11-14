@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import GlassSurface from './component/GlassSurface.jsx'
+import Topography from './component/Topography.jsx'
 import './App.css'
 
 type Metric = { value: number; unit: string; source: string }
@@ -91,9 +92,12 @@ function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour
 
 function App() {
   const [data, setData] = useState<DashboardState>(initialState)
+  const [weatherMode, setWeatherMode] = useState<'realtime' | 'hourly' | 'daily'>('hourly')
+  const [weatherView, setWeatherView] = useState<ViewState>({ payload: null, status: 'loading' })
   const [selectedLocationId, setSelectedLocationId] = useState<string>('kolkata')
   const [locationLoading, setLocationLoading] = useState(true)
   const [locationError, setLocationError] = useState<string | null>(null)
+  const [isDarkMode, setIsDarkMode] = useState(() => window.localStorage.getItem('nrg-theme') === 'dark')
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -107,9 +111,19 @@ function App() {
       }
     }))
     setData(Object.fromEntries(results) as DashboardState)
+    try {
+      setWeatherView({ payload: await getJson(`/weather?mode=${weatherMode}`), status: 'online' })
+    } catch (error) {
+      setWeatherView({ payload: null, status: 'error', error: error instanceof Error ? error.message : 'Request failed' })
+    }
     setLastUpdated(new Date())
     setRefreshing(false)
-  }, [])
+  }, [weatherMode])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = isDarkMode ? 'dark' : 'light'
+    window.localStorage.setItem('nrg-theme', isDarkMode ? 'dark' : 'light')
+  }, [isDarkMode])
 
   useEffect(() => {
     const initialTimer = window.setTimeout(() => {
@@ -162,6 +176,8 @@ function App() {
 
   const payload = (key: EndpointKey) => data[key]?.payload
   const forecastPayload = payload('forecast')
+  const weatherPayload = isRecord(weatherView.payload) ? weatherView.payload : null
+  const weatherRows = weatherPayload ? asList(weatherPayload.data).filter(isRecord) : []
   const forecastRows = isRecord(forecastPayload) ? asList(forecastPayload.forecast).filter(isRecord) : []
   const nextDay = forecastRows.slice(0, 24)
   const maxIntensity = Math.max(1, ...nextDay.map((row) => asNumber(row.intensity_gco2_kwh)))
@@ -183,6 +199,32 @@ function App() {
 
   return (
     <main className="app-shell">
+      <div className="topography-backdrop" aria-hidden="true">
+        <Topography
+          color="#ffffff"
+          lineCount={18}
+          lineWidth={0.5}
+          elevation={0.2}
+          foreground={0.2}
+          tilt={90}
+          speed={0.09}
+          direction="forward"
+          glow={0.55}
+          depthOfField={0}
+          fog={0.63}
+          hoverEffect="light"
+          clickEffect="pulse"
+          scale={1.25}
+          detail={0.34}
+          morph={0.28}
+          brightness={0.55}
+          markers="plus"
+          mouseRadius={2.5}
+          mouseStrength={0}
+          parallax={1}
+          style={{ width: '100%', height: '100%' }}
+        />
+      </div>
       <header className="topbar">
         <GlassSurface className="topbar-glass" width="100%" height="100%" borderRadius={0} backgroundOpacity={0.12} displace={0.35}>
         <a className="brand" href="#top" aria-label="NRG home">
@@ -210,7 +252,12 @@ function App() {
             <p className="hero-copy">Flexible demand, shifted into cleaner hours.<br className="desktop-break" /> A live view of your simulated grid fleet.</p>
           </div>
           <div className="hero-side">
-            <div className="live-pill"><span className="live-pulse" /> SYSTEM {healthPayload && healthPayload.status === 'ok' ? 'ACTIVE' : 'CONNECTING'}</div>
+            <div className="hero-status-row">
+              <div className="live-pill"><span className="live-pulse" /> SYSTEM {healthPayload && healthPayload.status === 'ok' ? 'ACTIVE' : 'CONNECTING'}</div>
+              <button className="theme-toggle" type="button" aria-pressed={isDarkMode} aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => setIsDarkMode((current) => !current)}>
+                <ThemeIcon dark={isDarkMode} /> <span>{isDarkMode ? 'LIGHT' : 'DARK'}</span>
+              </button>
+            </div>
             <label className="location-control">
               <span className="location-label"><LocationIcon /> GRID LOCATION</span>
               <select aria-label="Dashboard location" value={selectedLocationId} disabled={locationLoading} onChange={(event) => void changeLocation(event.target.value)}>
@@ -269,6 +316,25 @@ function App() {
               <span className={`health-state ${healthPayload?.status === 'ok' ? 'state-ok' : 'state-wait'}`}>{healthPayload?.status === 'ok' ? 'HEALTHY' : 'CHECKING'}</span>
             </div>
           </article>
+        </section>
+
+        <section className="weather-panel panel" aria-labelledby="weather-heading">
+          <CardGlass />
+          <div className="panel-heading">
+            <div><div className="section-kicker">OPEN-METEO WEATHER</div><h2 id="weather-heading">Conditions by time scale</h2></div>
+            <div className="panel-heading-right"><SourceBadge source={asText(weatherPayload?.source, 'ESTIMATED')} /><span className="tiny-label">{asText(weatherPayload?.resolution, weatherMode)}</span></div>
+          </div>
+          <div className="weather-controls" role="tablist" aria-label="Weather data resolution">
+            {(['realtime', 'hourly', 'daily'] as const).map((mode) => <button key={mode} type="button" role="tab" aria-selected={weatherMode === mode} className={weatherMode === mode ? 'weather-tab weather-tab-active' : 'weather-tab'} onClick={() => setWeatherMode(mode)}>{mode === 'realtime' ? '15-minute' : mode}</button>)}
+          </div>
+          {typeof weatherPayload?.note === 'string' && <p className="weather-note">{asText(weatherPayload.note)}</p>}
+          {weatherRows.length ? <div className="weather-table-wrap"><table className="weather-table"><thead><tr><th>TIME ({asText(weatherPayload?.timezone, 'local')})</th>{Object.keys(isRecord(weatherRows[0].values) ? weatherRows[0].values : {}).map((key) => <th key={key}>{formatKind(key)}</th>)}</tr></thead><tbody>
+            {weatherRows.slice(0, weatherMode === 'daily' ? 7 : weatherMode === 'realtime' ? 16 : 24).map((row, index) => {
+              const values = isRecord(row.values) ? row.values : {}
+              return <tr key={`${String(row.timestamp)}-${index}`}><td>{formatTime(row.timestamp, weatherMode === 'daily' ? { month: 'short', day: 'numeric' } : { hour: 'numeric', minute: '2-digit' })}</td>{Object.entries(values).map(([key, value]) => <td key={key}>{typeof value === 'number' ? value.toLocaleString(undefined, { maximumFractionDigits: 1 }) : asText(value == null ? null : String(value))}{typeof weatherPayload?.units === 'object' && weatherPayload.units !== null && key in weatherPayload.units ? ` ${String((weatherPayload.units as Record<string, unknown>)[key])}` : ''}</td>)}</tr>
+            })}
+          </tbody></table></div> : <EmptyState state={weatherView} label="Open-Meteo weather" />}
+          <div className="weather-meta">{weatherPayload?.fetched_at ? `Fetched ${formatTime(weatherPayload.fetched_at, { hour: 'numeric', minute: '2-digit' })}` : 'Waiting for weather data'} · powered by Open-Meteo</div>
         </section>
 
         <section className="content-grid lower-grid">
@@ -361,5 +427,6 @@ function ReportIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden=
 function DropIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3s6 7 6 11a6 6 0 1 1-12 0c0-4 6-11 6-11Z" stroke="currentColor" strokeWidth="1.6" /></svg> }
 function SnowIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M9 5l3 2 3-2M9 19l3-2 3 2M5 11l3-1 1-3M15 17l1-3 3-1M5 13l3 1 1 3m6-10 1 3 3 1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg> }
 function LocationIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z" stroke="currentColor" strokeWidth="1.6" /><circle cx="12" cy="10" r="2.2" stroke="currentColor" strokeWidth="1.6" /></svg> }
+function ThemeIcon({ dark }: { dark: boolean }) { return dark ? <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="1.6" /><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg> : <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20.2 15.2A8.5 8.5 0 0 1 8.8 3.8 8.5 8.5 0 1 0 20.2 15.2Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /></svg> }
 
 export default App

@@ -2,6 +2,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Literal
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
@@ -13,7 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.values import FACTOR_SET_VERSION
 from app.core.config import settings
 from app.db.database import Base, engine, get_session, SessionLocal
-from app.db.models import AppState, ForecastRecord, Report, VirtualLoad
+from app.db.models import AppState, CacheRecord, ForecastRecord, Report, VirtualLoad
 from app.modules.impact.service import completed_rows, metric, range_start
 from app.modules.impact.engine import summarize
 from app.modules.energy.location import (
@@ -23,7 +24,7 @@ from app.modules.energy.location import (
     restore_location,
     weather_cache_key,
 )
-from app.collectors.open_meteo import collect_weather
+from app.collectors.open_meteo import _fallback_payload, cached_payload, collect_weather
 from app.optimizer.service import optimize_pending
 from app.scheduler import jobs
 
@@ -137,6 +138,101 @@ def forecast(session: Session = Depends(get_session)):
     lowest = sorted(rows, key=lambda row: row.intensity)[:max(1, len(rows) // 8)]
     chosen = {row.timestamp for row in lowest}
     return {"source": rows[0].source if rows else "ESTIMATED", "factor_set_version": FACTOR_SET_VERSION, "forecast": [{"timestamp": row.timestamp.isoformat(), "intensity_gco2_kwh": row.intensity, "source": row.source, "weather": json.loads(row.weather_json), "low_carbon_window": row.timestamp in chosen} for row in rows]}
+
+
+@app.get("/api/v1/weather")
+def weather(mode: Literal["realtime", "hourly", "daily"] = Query("hourly"), session: Session = Depends(get_session)):
+    """Return raw Open-Meteo weather series for the selected display mode."""
+    cache_source = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
+    payload = cached_payload(session, cache_source)
+    if payload is None:
+        collect_weather(session)
+        payload = cached_payload(session, cache_source)
+    source_state = session.get(AppState, f"last_weather_mode:{cache_source}")
+    source = source_state.value if source_state and source_state.value in {"LIVE", "CACHED", "ESTIMATED"} else "ESTIMATED"
+    cached = session.scalar(select(CacheRecord).where(CacheRecord.source == cache_source).order_by(CacheRecord.fetched_at.desc()).limit(1))
+    if cached is not None and source_state is None:
+        source = "CACHED"
+    if payload is None:
+        payload = _fallback_payload()
+        source = "ESTIMATED"
+
+    units = payload.get("hourly_units", {})
+    section_name = {"realtime": "minutely_15", "hourly": "hourly", "daily": "daily"}[mode]
+    section = payload.get(section_name)
+    resolution = {"realtime": "15-minute", "hourly": "hourly", "daily": "daily"}[mode]
+    note = None
+    if mode == "realtime" and not isinstance(section, dict):
+        section = payload.get("current")
+        section_name = "current"
+        resolution = "current"
+        note = "15-minute series unavailable; showing current conditions."
+        if not isinstance(section, dict):
+            section = payload.get("hourly")
+            section_name = "hourly"
+            resolution = "hourly"
+            note = "15-minute and current series unavailable; showing cached hourly data."
+    elif mode == "realtime":
+        note = "Open-Meteo may interpolate 15-minute values from hourly model output outside Central Europe and North America."
+    if mode == "daily" and not isinstance(section, dict):
+        hourly = payload.get("hourly")
+        if isinstance(hourly, dict) and isinstance(hourly.get("time"), list):
+            grouped: dict[str, list[int]] = {}
+            for index, timestamp in enumerate(hourly["time"]):
+                if isinstance(timestamp, str):
+                    grouped.setdefault(timestamp[:10], []).append(index)
+            daily = {"time": [], "temperature_2m_mean": [], "temperature_2m_max": [], "temperature_2m_min": [], "precipitation_sum": [], "wind_speed_80m_max": [], "shortwave_radiation_mean": []}
+            for day, indices in sorted(grouped.items()):
+                daily["time"].append(day)
+                for output_key, input_key, operation in (
+                    ("temperature_2m_mean", "temperature_2m", "mean"),
+                    ("temperature_2m_max", "temperature_2m", "max"),
+                    ("temperature_2m_min", "temperature_2m", "min"),
+                    ("precipitation_sum", "precipitation", "sum"),
+                    ("wind_speed_80m_max", "wind_speed_80m", "max"),
+                    ("shortwave_radiation_mean", "shortwave_radiation", "mean"),
+                ):
+                    series = hourly.get(input_key, [])
+                    selected = [series[index] for index in indices if isinstance(series, list) and index < len(series) and isinstance(series[index], (int, float))]
+                    result = (sum(selected) / len(selected) if operation == "mean" and selected else (max(selected) if operation == "max" and selected else (min(selected) if operation == "min" and selected else sum(selected))))
+                    daily[output_key].append(result if selected else None)
+            section = daily
+            source = "ESTIMATED"
+            note = "Daily values derived from cached hourly weather because no daily series was available."
+        else:
+            note = "Daily series unavailable from the cached response."
+            section = {"time": []}
+    if not isinstance(section, dict):
+        section = {"time": [], **{key: [] for key in ("temperature_2m", "precipitation", "wind_speed_80m", "shortwave_radiation")}}
+
+    times = section.get("time", [])
+    if isinstance(times, str):
+        times = [times]
+    if not isinstance(times, list):
+        times = []
+    values = []
+    for index, timestamp in enumerate(times):
+        if not isinstance(timestamp, str):
+            continue
+        fields = {
+            key: column[index] if isinstance(column, list) and index < len(column) else column
+            for key, column in section.items()
+            if key != "time" and (isinstance(column, (list, int, float, str)) or column is None)
+        }
+        values.append({"timestamp": timestamp, "source": source, "values": fields})
+    unit_key = f"{section_name}_units"
+    response_units = payload.get(unit_key, units if mode == "hourly" else {})
+    return {
+        "mode": mode,
+        "resolution": resolution,
+        "source": source,
+        "location": current_location(),
+        "timezone": payload.get("timezone", settings.timezone),
+        "units": response_units,
+        "fetched_at": cached.fetched_at.isoformat() if cached else None,
+        "note": note,
+        "data": values,
+    }
 
 
 @app.get("/api/v1/schedule")

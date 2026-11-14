@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 URL = "https://api.open-meteo.com/v1/forecast"
 VARS = "temperature_2m,cloud_cover,wind_speed_80m,shortwave_radiation,precipitation"
 WEATHER_KEYS = tuple(VARS.split(","))
+CURRENT_VARS = VARS
+MINUTELY_15_VARS = "temperature_2m,precipitation,wind_speed_80m,shortwave_radiation"
+DAILY_VARS = "temperature_2m_mean,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,shortwave_radiation_sum"
 
 
 def _validate_payload(payload: object) -> dict:
@@ -69,6 +72,7 @@ def cached_payload(session: Session, source: str) -> dict | None:
 def _fallback_payload() -> dict:
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     times = [(now + timedelta(hours=index)).isoformat() for index in range(72)]
+    quarter_hours = [(now + timedelta(minutes=15 * index)).isoformat() for index in range(96)]
     return {
         "hourly": {
             "time": times,
@@ -77,7 +81,11 @@ def _fallback_payload() -> dict:
             "wind_speed_80m": [3.0] * len(times),
             "shortwave_radiation": [0.0] * len(times),
             "precipitation": [0.0] * len(times),
-        }
+        },
+        "timezone": settings.timezone,
+        "current": {"time": now.isoformat(), "temperature_2m": 25.0, "cloud_cover": 50.0, "wind_speed_80m": 3.0, "shortwave_radiation": 0.0, "precipitation": 0.0},
+        "minutely_15": {"time": quarter_hours, "temperature_2m": [25.0] * 96, "precipitation": [0.0] * 96, "wind_speed_80m": [3.0] * 96, "shortwave_radiation": [0.0] * 96},
+        "daily": {"time": [now.date().isoformat()], "temperature_2m_mean": [25.0], "temperature_2m_max": [25.0], "temperature_2m_min": [25.0], "precipitation_sum": [0.0], "wind_speed_10m_max": [3.0], "shortwave_radiation_sum": [0.0]},
     }
 
 
@@ -86,6 +94,10 @@ def _request_payload(client: httpx.Client) -> dict:
         "latitude": settings.latitude,
         "longitude": settings.longitude,
         "hourly": VARS,
+        "current": CURRENT_VARS,
+        "minutely_15": MINUTELY_15_VARS,
+        "daily": DAILY_VARS,
+        "forecast_minutely_15": 96,
         "forecast_days": 3,
         "timezone": settings.timezone,
         "wind_speed_unit": "ms",
