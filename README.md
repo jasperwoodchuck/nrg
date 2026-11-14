@@ -34,4 +34,4 @@ See [docs/methodology.md](docs/methodology.md) for formulas and limitations and 
 
 ## License
 
-This project is dual-licensed under the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+This project is dual-licensed under the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.                   
