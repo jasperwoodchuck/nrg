@@ -97,6 +97,52 @@ type DashboardState = Record<EndpointKey, ViewState>
 
 const initialState = Object.fromEntries(endpoints.map(({ key }) => [key, { payload: null, status: 'loading' }])) as DashboardState
 
+const hourlyLoadProfile = Array.from({ length: 168 }, (_, index) => {
+  const hour = index % 24
+  const day = Math.floor(index / 24)
+  const dailyPeak = hour >= 7 && hour <= 21
+  const morningPeak = hour >= 7 && hour <= 10
+  const eveningPeak = hour >= 16 && hour <= 20
+  const dayFactor = 0.94 + (day % 5) * 0.03
+  const actual = (24 + (dailyPeak ? 12 : 0) + (morningPeak ? 34 : 0) + (eveningPeak ? 52 : 0) + (hour === 12 ? 28 : 0)) * dayFactor
+  return { actual, baseline: actual * 1.16 + (dailyPeak ? 2 : 0) }
+})
+
+function sampleLoadProfile(mode: 'realtime' | 'hourly' | 'daily') {
+  const recentHours = hourlyLoadProfile.slice(-48)
+  if (mode === 'hourly') return recentHours
+  if (mode === 'daily') {
+    return Array.from({ length: 7 }, (_, day) => {
+      const values = hourlyLoadProfile.slice(day * 24, (day + 1) * 24)
+      return {
+        actual: values.reduce((sum, point) => sum + point.actual, 0) / values.length,
+        baseline: values.reduce((sum, point) => sum + point.baseline, 0) / values.length,
+      }
+    })
+  }
+  return Array.from({ length: 193 }, (_, index) => {
+    const hourIndex = Math.min(index / 4, recentHours.length - 1)
+    const lowerIndex = Math.floor(hourIndex)
+    const upperIndex = Math.min(lowerIndex + 1, recentHours.length - 1)
+    const fraction = hourIndex - lowerIndex
+    const lower = recentHours[lowerIndex]
+    const upper = recentHours[upperIndex]
+    return {
+      actual: lower.actual + (upper.actual - lower.actual) * fraction,
+      baseline: lower.baseline + (upper.baseline - lower.baseline) * fraction,
+    }
+  })
+}
+
+function profilePath(profile: ReturnType<typeof sampleLoadProfile>, key: 'actual' | 'baseline', width: number, height: number): string {
+  const max = 120
+  return profile.map((point, index) => {
+    const x = (index / (profile.length - 1)) * width
+    const y = height - (point[key] / max) * height
+    return `${index === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`
+  }).join(' ')
+}
+
 async function getJson(path: string): Promise<unknown> {
   const response = await fetch(`${API_BASE}${path}`, { headers: { Accept: 'application/json' } })
   const body: unknown = await response.json().catch(() => null)
@@ -425,6 +471,9 @@ function App() {
   const forecastPayload = payload('forecast')
   const weatherPayload = isRecord(weatherView.payload) ? weatherView.payload : null
   const weatherRows = weatherPayload ? asList(weatherPayload.data).filter(isRecord) : []
+  const loadSeries = sampleLoadProfile(weatherMode)
+  const loadSeriesWindow = weatherMode === 'daily' ? '7 days' : '48 hours'
+  const loadSeriesStep = weatherMode === 'realtime' ? '15-minute' : weatherMode === 'hourly' ? 'hourly' : 'daily'
   const airQualityPayload = isRecord(airQualityView.payload) ? airQualityView.payload : null
   const airCurrent = airQualityPayload && isRecord(airQualityPayload.current) ? airQualityPayload.current : null
   const airUnits = airQualityPayload && isRecord(airQualityPayload.current_units) ? airQualityPayload.current_units : null
@@ -670,6 +719,17 @@ function App() {
             })}
           </tbody></table></div> : <EmptyState state={weatherView} label="Open-Meteo weather" />}
           <div className="weather-meta">{weatherPayload?.fetched_at ? `Fetched ${formatTime(weatherPayload.fetched_at, { hour: 'numeric', minute: '2-digit' })}` : 'Waiting for weather data'} · powered by Open-Meteo</div>
+          <div className="load-series-heading"><div><div className="section-kicker">SIMULATED ENERGY</div><h3>Load against baseline</h3><p>Illustrative household demand · {loadSeriesStep} samples across {loadSeriesWindow}</p></div><SourceBadge source="SIMULATED" /></div>
+          <div className="load-series-chart" role="img" aria-label={`Simulated actual household load and baseline with ${loadSeriesStep} samples across ${loadSeriesWindow}, in kilowatts`}>
+            <div className="load-series-axis"><span>120</span><span>80</span><span>40</span><span>0</span></div>
+            <svg viewBox="0 0 960 180" preserveAspectRatio="none" aria-hidden="true">
+              <defs><linearGradient id="load-area" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#4b9d73" stopOpacity=".28"/><stop offset="100%" stopColor="#4b9d73" stopOpacity=".02"/></linearGradient></defs>
+              <path className="load-baseline-line" d={profilePath(loadSeries, 'baseline', 960, 180)} />
+              <path className="load-actual-area" d={`${profilePath(loadSeries, 'actual', 960, 180)} L 960 180 L 0 180 Z`} />
+              <path className="load-actual-line" d={profilePath(loadSeries, 'actual', 960, 180)} />
+            </svg>
+          </div>
+          <div className="load-series-footer"><div className="load-series-legend"><span><i className="load-legend-actual"/>Actual kW</span><span><i className="load-legend-baseline"/>Baseline kW</span></div><div className="load-series-ticks">{(weatherMode === 'daily' ? ['7 days ago', '5 days', '3 days', 'Yesterday', 'Today'] : ['48h ago', '36h', '24h', '12h', 'Now']).map((tick) => <span key={tick}>{tick}</span>)}</div></div>
         </section>
         </div>
 
@@ -733,6 +793,7 @@ function App() {
             {reportsRows.length ? <div className="report-history">{reportsRows.slice(0, 4).map((item, index) => <button className="history-row" type="button" key={`${String(item.created_at)}-${index}`} aria-label={`Open report from ${formatTime(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`} onClick={() => setSelectedReport(item)}><span className="history-icon"><ReportIcon /></span><div><strong>{formatTime(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</strong><span>{asText(item.body, 'Daily grid summary')}</span></div><span className="history-arrow" aria-hidden="true">↗</span></button>)}</div> : <EmptyState state={data.reports} label="Reports" />}
           </article>
         </section>
+        </div>
 
         <footer className="page-footer"><span>NRG <b>·</b> Autonomous Grid Carbon Optimizer</span><span>{lastUpdated ? `Updated ${formatTime(lastUpdated.toISOString())}` : 'Connecting to API'} <b>·</b> <a href={`${API_BASE.replace('/api/v1', '')}/docs`} target="_blank" rel="noreferrer">API docs ↗</a></span></footer>
       </div>
