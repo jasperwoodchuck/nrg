@@ -16,7 +16,7 @@ The API creates its SQLite database and seeds demo history on startup. OpenAPI i
 
 ## Configuration
 
-Copy `backend/.env.example` to `backend/.env` only when you need to override application defaults; otherwise, no backend `.env` file is needed for local development. For local frontend development, set `VITE_API_BASE_URL=http://localhost:8000/api/v1` in `frontend/.env`. Set `FRONTEND_ORIGIN` in the backend environment to the browser origin if it differs from `http://localhost:5173`. Defaults target Kolkata, India. The location selector includes cities across all Indian states and union territories; the map picker accepts any coordinates and asks Open-Meteo to resolve their IANA timezone. You can import coordinates by pasting a Zoom Earth map URL or open the selected point in Zoom Earth. `DATABASE_URL` defaults to a local SQLite file. Optional model overrides are documented in [methodology](docs/methodology.md).
+The application defaults to a local SQLite database and `http://localhost:5173` frontend origin. For local development, set `VITE_API_BASE_URL=http://localhost:8000/api/v1` in `frontend/.env`. For Render, copy `backend/.env.example` and replace its placeholders with your Supabase connection URI and Vercel frontend origin. Defaults target Kolkata, India. The location selector includes cities across all Indian states and union territories; the map picker accepts any coordinates and asks Open-Meteo to resolve their IANA timezone. You can import coordinates by pasting a Zoom Earth map URL or open the selected point in Zoom Earth. Optional model overrides are documented in [methodology](docs/methodology.md).
 
 ## Use Supabase Postgres
 
@@ -32,7 +32,7 @@ This repository's Vercel project should use `frontend` as its **Root Directory**
 
 Set the only required Vercel environment variable, `VITE_API_BASE_URL`, to the public API base URL, including `/api/v1` (replace the example value in `frontend/.env.example` with your API host). Set it for each Vercel environment you will deploy. Vite embeds this value during the build, so redeploy after changing it. Do not put backend secrets in `VITE_*` variables.
 
-Deploy the API separately on a service that supports the included `backend/Dockerfile`, with a durable database configured through `DATABASE_URL`. The API starts a background scheduler and defaults to a local SQLite file, so the static Vercel frontend deployment does not provide the persistent backend runtime this project expects. Set backend `FRONTEND_ORIGIN` to the exact production site origin so browser requests pass the current CORS allowlist. The backend currently accepts one exact origin; Vercel preview domains need corresponding CORS support/configuration before they can call the API.
+Deploy the API separately on Render as a Docker web service with `backend` as its root directory and `Dockerfile` as the Dockerfile path. Set `DATABASE_URL` and `FRONTEND_ORIGIN` from `backend/.env.example`; Render supplies `PORT`, which the container uses. The API starts a background scheduler and needs a persistent backend runtime; the static Vercel frontend deployment does not provide this. Set `FRONTEND_ORIGIN` to the exact production site origin so browser requests pass the current CORS allowlist. The backend currently accepts one exact origin; Vercel preview domains need corresponding CORS support/configuration before they can call the API.
 
 ## Demo
 
