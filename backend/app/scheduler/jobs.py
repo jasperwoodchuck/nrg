@@ -72,7 +72,7 @@ def impact_job():
 def daily_report_job():
     with SessionLocal() as session:
         totals = summarize(completed_rows(session))
-        body = (f"TerraPulse report: {totals['loads_optimized']} simulated loads completed, "
+        body = (f"NRG report: {totals['loads_optimized']} simulated loads completed, "
                 f"{totals['kwh_shifted']:.2f} kWh shifted, "
                 f"{totals['saved_a_g'] / 1000:.3f} kgCO2 avoided vs typical-time baseline "
                 f"({totals['saved_b_g'] / 1000:.3f} kgCO2 vs daily-average baseline).")

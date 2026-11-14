@@ -7,3 +7,4 @@
 - **SQLite and deterministic simulation:** A local SQLite database, standard-library seeded random generator, and Open-Meteo fallback model keep the demo self-contained. External live data is optional.
 - **Electricity Maps left for later:** The prompt allows this optional source to be cut. This build keeps the working Open-Meteo plus estimated fallback path and explicitly reports that Electricity Maps is skipped.
 - **Electricity Maps left for later:** The prompt allows this optional source to be cut. This build keeps the working Open-Meteo plus estimated fallback path and explicitly reports that Electricity Maps is skipped.
+- **Frontend API bridge:** The initial dashboard uses the existing GET endpoints directly, refreshes every 60 seconds, and reads its API base URL from `VITE_API_BASE_URL`. Backend CORS allows the configured `FRONTEND_ORIGIN` (default Vite dev origin).

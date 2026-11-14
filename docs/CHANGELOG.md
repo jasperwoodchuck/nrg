@@ -28,3 +28,12 @@ All notable changes to this project will be documented in this file.
 - (2026-11-14) Milestones 2–3: configurable deterministic fallback model, upstream response cache, and validated Open-Meteo collector.
 - (2026-11-14) Milestone 1: backend package skeleton, environment-backed configuration, SQLite ORM models, factor-set version, and decision notes.
 - (2026-11-14) Golden-value, deterministic fallback, optimizer constraint, collector failure, and API contract tests.
+
+### Added
+- (2026-11-14) Replace the Vite starter screen with a responsive dashboard wired to impact metrics, forecast, schedules, virtual loads, insights, reports, and health.
+
+### Changed
+- (2026-11-14) Configure browser CORS for the frontend origin and expose the frontend API base URL through `VITE_API_BASE_URL`.
+
+### Changed
+- (2026-11-14) Rename the product and API project from TerraPulse to NRG.

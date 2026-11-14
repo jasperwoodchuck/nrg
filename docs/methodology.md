@@ -1,4 +1,4 @@
-# TerraPulse methodology
+# NRG methodology
 
 ## Data and source badges
 

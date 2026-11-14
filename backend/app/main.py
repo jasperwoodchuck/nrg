@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
-from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -36,7 +36,8 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown(wait=False)
 
 
-app = FastAPI(title="TerraPulse Autonomous Grid Carbon Optimizer", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="NRG Autonomous Grid Carbon Optimizer", version="1.0.0", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin], allow_methods=["GET", "POST"], allow_headers=["*"])
 
 
 @app.exception_handler(HTTPException)

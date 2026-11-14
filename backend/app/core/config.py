@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     latitude: float = 22.57
     longitude: float = 88.36
     timezone: str = "Asia/Kolkata"
+    frontend_origin: str = "http://localhost:5173"
     electricity_maps_api_key: str | None = None
     india_grid_average_gco2_kwh: float = 700.0
     solar_reduction_fraction: float = 0.42

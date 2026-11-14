@@ -1,1 +1,1 @@
-"""TerraPulse backend application."""
+"""NRG backend application."""
