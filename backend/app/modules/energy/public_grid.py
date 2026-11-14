@@ -70,14 +70,13 @@ def _fetch_public_grid(client: httpx.Client, state: str | None = None) -> dict[s
             None,
         )
     if not isinstance(reading, dict):
-        if state:
-            reading = {}
-        else:
-            raise ValueError("Public grid service returned no valid All India demand reading")
-    if not state and (reading.get("has_data") is not True or not _number(reading.get("demand_mw"))):
-        raise ValueError("Public grid service returned no valid All India demand reading")
-    if not state and (not isinstance(reading.get("timestamp"), str) or not isinstance(reading.get("source_type"), str)):
-        raise ValueError("Public grid service returned incomplete demand provenance")
+        reading = {}
+    has_demand = (
+        reading.get("has_data") is True
+        and _number(reading.get("demand_mw"))
+        and isinstance(reading.get("timestamp"), str)
+        and isinstance(reading.get("source_type"), str)
+    )
 
     items = supply.get("items")
     latest_date = supply.get("latest_date")
@@ -107,8 +106,8 @@ def _fetch_public_grid(client: httpx.Client, state: str | None = None) -> dict[s
         "stale": False,
         "snapshot": {
             "name": reading.get("name", state or "India"),
-            "has_data": reading.get("has_data") is True and _number(reading.get("demand_mw")),
-            "demand_mw": reading.get("demand_mw") if reading.get("has_data") is True and _number(reading.get("demand_mw")) else None,
+            "has_data": has_demand,
+            "demand_mw": reading.get("demand_mw") if has_demand else None,
             "timestamp": reading.get("timestamp"),
             "source_type": reading.get("source_type"),
             "source": reading.get("source"),

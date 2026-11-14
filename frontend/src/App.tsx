@@ -268,10 +268,10 @@ function isLanguageCode(value: string | null): value is LanguageCode {
   return value !== null && Object.hasOwn(languages, value)
 }
 
-function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' }, locale?: string): string {
+function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' }, locale?: string, timeZone?: string): string {
   if (typeof value !== 'string') return '—'
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '—' : new Intl.DateTimeFormat(locale, options).format(date)
+  return Number.isNaN(date.getTime()) ? '—' : new Intl.DateTimeFormat(locale, { ...options, ...(timeZone ? { timeZone } : {}) }).format(date)
 }
 
 function App() {
@@ -281,7 +281,7 @@ function App() {
   })
   const t = (key: Parameters<typeof translate>[1]) => translate(language, key)
   const tx = (text: string) => translateText(language, text)
-  const formatDate = (value: unknown, options?: Intl.DateTimeFormatOptions) => formatTime(value, options, languages[language].locale)
+  const formatDate = (value: unknown, options?: Intl.DateTimeFormatOptions) => formatTime(value, options, languages[language].locale, locationTimezone)
   const [showDashboard, setShowDashboard] = useState(false)
   const [activeDashboardTab, setActiveDashboardTab] = useState<'overview' | 'power' | 'weather' | 'environment' | 'mobility' | 'reports'>('overview')
   const [mobilityDistance, setMobilityDistance] = useState('8')
@@ -302,6 +302,7 @@ function App() {
   const reportDialogRef = useRef<HTMLDialogElement>(null)
   const [weatherMode, setWeatherMode] = useState<'realtime' | 'hourly' | 'daily'>('hourly')
   const [hoveredLoadPoint, setHoveredLoadPoint] = useState<{ index: number; x: number; y: number; below: boolean } | null>(null)
+  const [hoveredForecastIndex, setHoveredForecastIndex] = useState<number | null>(null)
   const [weatherView, setWeatherView] = useState<ViewState>({ payload: null, status: 'loading' })
   const [airQualityView, setAirQualityView] = useState<ViewState>({ payload: null, status: 'loading' })
   const [waterQualityView, setWaterQualityView] = useState<ViewState>({ payload: null, status: 'loading' })
@@ -309,8 +310,8 @@ function App() {
   const [waterRegion, setWaterRegion] = useState('West Bengal')
   const [environmentRefreshing, setEnvironmentRefreshing] = useState(false)
   const [selectedLocationId, setSelectedLocationId] = useState<string>('kolkata')
-  const [locationPoint, setLocationPoint] = useState<LocationPoint>({ latitude: 22.57, longitude: 88.36 })
   const [customGridState, setCustomGridState] = useState<string | null>(null)
+  const [locationPoint, setLocationPoint] = useState<LocationPoint>({ latitude: 22.57, longitude: 88.36 })
   const [mapPoint, setMapPoint] = useState<LocationPoint>({ latitude: 22.57, longitude: 88.36 })
   const [locationTimezone, setLocationTimezone] = useState('Asia/Kolkata')
   const [timezoneSource, setTimezoneSource] = useState('ESTIMATED')
@@ -509,6 +510,7 @@ function App() {
         longitude: location.longitude,
         timezone: location.timezone,
       })
+      setCustomGridState(null)
       setSelectedLocationId(location.id)
       setLocationPoint({ latitude: location.latitude, longitude: location.longitude })
       setMapPoint({ latitude: location.latitude, longitude: location.longitude })
@@ -528,10 +530,11 @@ function App() {
     setLocationError(null)
     try {
       const response = await postJson('/location', mapPoint)
-      setLocationPoint(mapPoint)
-      setSelectedLocationId('custom')
       const region = await getJson(`/location/region?latitude=${mapPoint.latitude}&longitude=${mapPoint.longitude}`)
       const resolvedGridState = isRecord(region) && typeof region.state === 'string' ? region.state : null
+      setLocationPoint(mapPoint)
+      setSelectedLocationId('custom')
+      setCustomGridState(resolvedGridState)
       setScenarioResult(null)
       if (isRecord(response) && isRecord(response.location) && typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
       if (isRecord(response) && typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
@@ -575,11 +578,11 @@ function App() {
   const loadTooltipTime = (index: number) => {
     if (weatherMode === 'daily') {
       const date = new Date(loadProfileEndTime - (loadSeries.length - 1 - index) * 24 * 60 * 60 * 1000)
-      return new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(date)
+      return new Intl.DateTimeFormat(languages[language].locale, { weekday: 'short', timeZone: locationTimezone }).format(date)
     }
     const intervalHours = weatherMode === 'realtime' ? 0.25 : 1
     const date = new Date(loadProfileEndTime - (loadSeries.length - 1 - index) * intervalHours * 60 * 60 * 1000)
-    return new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric' }).format(date)
+    return new Intl.DateTimeFormat(languages[language].locale, { weekday: 'short', hour: 'numeric', timeZone: locationTimezone }).format(date)
   }
   const handleLoadPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
     const svgBounds = event.currentTarget.getBoundingClientRect()
@@ -631,7 +634,7 @@ function App() {
     : '—'
   const demandSource = publicGridSnapshot?.has_data === false ? 'NO READING' : publicGridSnapshot?.source_type === 'official' ? 'OFFICIAL' : 'PUBLIC'
   const demandNote = publicGridSnapshot?.has_data === false
-    ? 'No current state demand reading'
+    ? tx('No current demand reading')
     : publicGridSnapshot && typeof publicGridSnapshot.age_minutes === 'number'
       ? `Grid reading · ${Math.round(publicGridSnapshot.age_minutes)} min old`
       : 'Latest public grid reading'
@@ -698,6 +701,7 @@ function App() {
               <button className="theme-toggle" type="button" aria-pressed={isDarkMode} aria-label={isDarkMode ? tx('Switch to light mode') : tx('Switch to dark mode')} onClick={() => setIsDarkMode((current) => !current)}>
                 <ThemeIcon dark={isDarkMode} /> <span>{isDarkMode ? t('light') : t('dark')}</span>
               </button>
+              <a className="github-link" href="https://github.com/jasperwoodchuck/nrg" target="_blank" rel="noreferrer" aria-label="NRG on GitHub" title="NRG on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.56.1.76-.24.76-.54v-2.08c-3.1.68-3.76-1.32-3.76-1.32-.51-1.3-1.24-1.65-1.24-1.65-1.01-.69.08-.68.08-.68 1.12.08 1.71 1.15 1.71 1.15 1 .1.75 2.57 3.94 1.82.1-.72.39-1.21.7-1.49-2.47-.28-5.07-1.24-5.07-5.5 0-1.22.44-2.22 1.15-3-.12-.28-.5-1.42.11-2.95 0 0 .94-.3 3.05 1.15a10.6 10.6 0 0 1 5.55 0c2.11-1.45 3.05-1.15 3.05-1.15.61 1.53.23 2.67.11 2.95.72.78 1.15 1.78 1.15 3 0 4.27-2.6 5.21-5.08 5.49.4.34.76 1.02.76 2.06v3.05c0 .3.2.65.77.54A11.1 11.1 0 0 0 12 .9Z"/></svg></a>
             </div>
             <label className="location-control">
               <span className="location-label"><LocationIcon /> {t('gridLocation')}</span>
@@ -780,13 +784,16 @@ function App() {
               <div className="panel-heading-right"><SourceBadge source={forecastSource} /><span className="tiny-label">{tx('NEXT 24 HOURS')}</span></div>
             </div>
             <div className="chart-area">
-              {nextDay.length ? <div className="bar-chart" role="img" aria-label="Hourly forecast carbon intensity bars">
+              {nextDay.length ? <div className="bar-chart" role="group" aria-label="Hourly forecast carbon intensity bars" onMouseLeave={() => setHoveredForecastIndex(null)}>
                 {nextDay.map((row, index) => {
                   const intensity = asNumber(row.intensity_gco2_kwh)
                   const height = Math.max(8, (intensity / maxIntensity) * 100)
                   const low = row.low_carbon_window === true
-                  return <div className="bar-column" key={`${String(row.timestamp)}-${index}`} title={`${formatDate(row.timestamp)} · ${Math.round(intensity)} gCO₂/kWh`}>
+                  const isHovered = hoveredForecastIndex === index
+                  const tooltipId = `forecast-tooltip-${index}`
+                  return <div className="bar-column" key={`${String(row.timestamp)}-${index}`} tabIndex={0} aria-label={`${formatDate(row.timestamp)} · ${intensity.toFixed(1)} gCO₂/kWh${low ? ' · cleaner window' : ''}`} aria-describedby={isHovered ? tooltipId : undefined} onMouseEnter={() => setHoveredForecastIndex(index)} onFocus={() => setHoveredForecastIndex(index)} onBlur={() => setHoveredForecastIndex(null)}>
                     <div className={`bar ${low ? 'bar-low' : ''}`} style={{ height: `${height}%` }} />
+                    {isHovered && <div className="forecast-bar-tooltip" id={tooltipId} role="tooltip"><strong>{formatDate(row.timestamp, { weekday: 'short', hour: 'numeric' })}</strong><span><i className="legend-standard"/>Grid intensity<b>{intensity.toFixed(1)} gCO₂/kWh</b></span>{low && <span><i className="legend-low"/>Cleaner window</span>}</div>}
                     {index % 3 === 0 && <span className="bar-label">{formatDate(row.timestamp, { hour: 'numeric' })}</span>}
                   </div>
                 })}
@@ -794,7 +801,7 @@ function App() {
               <div className="chart-legend"><span><i className="legend-dot legend-standard" /> {tx('Grid intensity')}</span><span><i className="legend-dot legend-low" /> {tx('Cleaner window')}</span><span className="chart-unit">{tx('gCO₂ / kWh')}</span></div>
             </div>
             <div className="forecast-stats">
-              <div><span className="stat-label">{tx('CLEANEST HOUR')}</span><strong>{nextDay.length ? `${Math.round(Math.min(...nextDay.map((row) => asNumber(row.intensity_gco2_kwh))))} <small>gCO₂/kWh</small>` : '—'}</strong></div>
+              <div><span className="stat-label">{tx('CLEANEST HOUR')}</span><strong>{nextDay.length ? <>{Math.round(Math.min(...nextDay.map((row) => asNumber(row.intensity_gco2_kwh))))} <small>gCO₂/kWh</small></> : '—'}</strong></div>
               <div><span className="stat-label">{tx('FORECAST SOURCE')}</span><strong>{asText(isRecord(forecastPayload) ? forecastPayload.source : null, '—')}</strong></div>
               <div><span className="stat-label">{tx('HORIZON')}</span><strong>{forecastRows.length || '—'} <small>{tx('hours')}</small></strong></div>
             </div>
@@ -803,7 +810,7 @@ function App() {
           <article className="panel insights-panel">
               <div className="panel-heading"><div><div className="section-kicker">{tx('PULSE CHECK')}</div><h2>{tx('Grid insights')}</h2></div><span className="sparkle">✳</span></div>
             {insightRows.length ? <div className="insight-list">
-              {insightRows.map((item, index) => <InsightItem key={`${String(item.type)}-${index}`} item={item} language={language} />)}
+              {insightRows.map((item, index) => <InsightItem key={`${String(item.type)}-${index}`} item={item} language={language} timeZone={locationTimezone} />)}
             </div> : <EmptyState language={language} state={data.insights} label={tx('Insights')} />}
             <div className="health-strip">
               <span className="health-icon"><PulseIcon /></span>
@@ -862,9 +869,9 @@ function App() {
               <path className="load-actual-line" d={profilePath(loadSeries, 'actual', 960, 180)} />
               {hoveredLoadPoint && <><line className="load-hover-guide" x1={(hoveredLoadPoint.index / (loadSeries.length - 1)) * 960} x2={(hoveredLoadPoint.index / (loadSeries.length - 1)) * 960} y1="0" y2="180"/><circle className="load-hover-dot" cx={(hoveredLoadPoint.index / (loadSeries.length - 1)) * 960} cy={180 - (loadSeries[hoveredLoadPoint.index].actual / 120) * 180} r="5"/></>}
             </svg>
-            {hoveredLoadPoint && <div className={`load-series-tooltip${hoveredLoadPoint.below ? ' load-series-tooltip-below' : ''}`} style={{ left: `${hoveredLoadPoint.x}px`, top: `${hoveredLoadPoint.y}px` }}><strong>{loadTooltipTime(hoveredLoadPoint.index)}</strong><span><i className="load-legend-actual"/>Actual kW<b>{loadSeries[hoveredLoadPoint.index].actual.toFixed(2)}</b></span><span><i className="load-legend-baseline"/>Baseline kW<b>{loadSeries[hoveredLoadPoint.index].baseline.toFixed(2)}</b></span></div>}
+            {hoveredLoadPoint && <div className={`load-series-tooltip${hoveredLoadPoint.below ? ' load-series-tooltip-below' : ''}`} style={{ left: `${hoveredLoadPoint.x}px`, top: `${hoveredLoadPoint.y}px` }}><strong>{loadTooltipTime(hoveredLoadPoint.index)}</strong><span><i className="load-legend-actual"/>{tx('Actual kW')}<b>{loadSeries[hoveredLoadPoint.index].actual.toFixed(2)}</b></span><span><i className="load-legend-baseline"/>{tx('Baseline kW')}<b>{loadSeries[hoveredLoadPoint.index].baseline.toFixed(2)}</b></span></div>}
           </div>
-          <div className="load-series-footer"><div className="load-series-legend"><span><i className="load-legend-actual"/>Actual kW</span><span><i className="load-legend-baseline"/>Baseline kW</span></div><div className="load-series-ticks">{(weatherMode === 'daily' ? ['7 days ago', '5 days', '3 days', 'Yesterday', 'Today'] : ['48h ago', '36h', '24h', '12h', 'Now']).map((tick) => <span key={tick}>{tick}</span>)}</div></div>
+          <div className="load-series-footer"><div className="load-series-legend"><span><i className="load-legend-actual"/>{tx('Actual kW')}</span><span><i className="load-legend-baseline"/>{tx('Baseline kW')}</span></div><div className="load-series-ticks">{(weatherMode === 'daily' ? ['7 days ago', '5 days', '3 days', 'Yesterday', 'Today'] : ['48h ago', '36h', '24h', '12h', 'Now']).map((tick) => <span key={tick}>{tx(tick)}</span>)}</div></div>
         </section>
         </div>
 
@@ -885,7 +892,7 @@ function App() {
           </article>
 
           <article className="panel environment-panel water-quality-panel">
-            <div className="panel-heading"><div><div className="section-kicker">CPCB SURFACE WATER</div><h2>{tx('Nearby sampling stations')}</h2></div><select aria-label={tx('Water quality region')} value={waterRegion} onChange={(event) => setWaterRegion(event.target.value)} disabled={!waterRegions.length || environmentRefreshing}>{(waterRegions.length ? waterRegions : ['West Bengal']).map((region) => <option key={region} value={region}>{region}</option>)}</select></div>
+              <div className="panel-heading"><div><div className="section-kicker">{tx('CPCB SURFACE WATER')}</div><h2>{tx('Nearby sampling stations')}</h2></div><select aria-label={tx('Water quality region')} value={waterRegion} onChange={(event) => setWaterRegion(event.target.value)} disabled={!waterRegions.length || environmentRefreshing}>{(waterRegions.length ? waterRegions : ['West Bengal']).map((region) => <option key={region} value={region}>{region}</option>)}</select></div>
             <p className="water-data-note">{tx('Historical manual samples in')} {asText(waterQualityPayload?.region, waterRegion)} · {tx('within')} {asNumber(waterQualityPayload?.radius_km, 100)} km</p>
             {waterStations.length ? <div className="water-station-list">{waterStations.slice(0, 5).map((station, index) => {
               const parameters = asList(station.parameters).filter(isRecord)
@@ -900,7 +907,7 @@ function App() {
 
         <section className="content-grid waste-grid" aria-label="Simulated waste collection automation">
           <article className="panel waste-panel">
-            <div className="panel-heading"><div><div className="section-kicker">SIMULATED WASTE MANAGEMENT</div><h2>{tx('Priority collection plan')}</h2></div><SourceBadge source={asText(wastePlan?.source, 'SIMULATED')} /></div>
+            <div className="panel-heading"><div><div className="section-kicker">{tx('SIMULATED WASTE MANAGEMENT')}</div><h2>{tx('Priority collection plan')}</h2></div><SourceBadge source={asText(wastePlan?.source, 'SIMULATED')} /></div>
             {wasteSummary ? <>
               <p className="waste-plan-note">{asText(wastePlan?.methodology)} {tx('This is a demonstration model; readings are not connected to physical bins.')}</p>
               <div className="waste-summary">
@@ -947,12 +954,12 @@ function App() {
           </article>
           <article className="panel report-history-panel">
               <div className="panel-heading"><div><div className="section-kicker">{tx('REPORT ARCHIVE')}</div><h2>{tx('Recent reports')}</h2></div><span className="count-chip">{reportsRows.length} reports</span></div>
-            {reportsRows.length ? <div className="report-history">{reportsRows.slice(0, 4).map((item, index) => <button className="history-row" type="button" key={`${String(item.created_at)}-${index}`} aria-label={`Open report from ${formatDate(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`} onClick={() => setSelectedReport(item)}><span className="history-icon"><ReportIcon /></span><div><strong>{formatDate(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</strong><span>{asText(item.body, 'Daily grid summary')}</span></div><span className="history-arrow" aria-hidden="true">↗</span></button>)}</div> : <EmptyState language={language} state={data.reports} label={tx('Reports')} />}
+            {reportsRows.length ? <div className="report-history">{reportsRows.slice(0, 4).map((item, index) => <button className="history-row" type="button" key={`${String(item.created_at)}-${index}`} aria-label={`${tx('Open report from')} ${formatDate(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`} onClick={() => setSelectedReport(item)}><span className="history-icon"><ReportIcon /></span><div><strong>{formatDate(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</strong><span>{asText(item.body, 'Daily grid summary')}</span></div><span className="history-arrow" aria-hidden="true">↗</span></button>)}</div> : <EmptyState language={language} state={data.reports} label={tx('Reports')} />}
           </article>
         </section>
         </div>
 
-        <footer className="page-footer"><span>NRG <b>·</b> Autonomous Grid Carbon Optimizer</span><span>{lastUpdated ? `${tx('Updated')} ${formatDate(lastUpdated.toISOString())}` : tx('Connecting to API')} <b>·</b> <a href={`${API_BASE.replace('/api/v1', '')}/docs`} target="_blank" rel="noreferrer">{tx('API docs ↗')}</a></span></footer>
+        <footer className="page-footer"><span>NRG <b>·</b> {tx('Autonomous Grid Carbon Optimizer')}</span><span>{lastUpdated ? `${tx('Updated')} ${formatDate(lastUpdated.toISOString())}` : tx('Connecting to API')} <b>·</b> <a href={`${API_BASE.replace('/api/v1', '')}/docs`} target="_blank" rel="noreferrer">{tx('API docs ↗')}</a></span></footer>
       </div>
       <dialog className="report-dialog" ref={reportDialogRef} aria-labelledby="report-dialog-title" onClose={() => setSelectedReport(null)}>
         {selectedReport && <div className="report-dialog-content">
@@ -963,7 +970,7 @@ function App() {
       </dialog>
       <dialog className="location-dialog" ref={locationDialogRef} aria-labelledby="location-dialog-title" onClose={() => setMapOpen(false)}>
         <div className="location-dialog-content">
-          <div className="location-dialog-heading"><div><div className="section-kicker">GRID LOCATION</div><h2 id="location-dialog-title">{tx('Choose a point on the map')}</h2></div><button className="report-dialog-close" type="button" aria-label={tx('Close map')} onClick={() => setMapOpen(false)}>×</button></div>
+          <div className="location-dialog-heading"><div><div className="section-kicker">{tx('GRID LOCATION')}</div><h2 id="location-dialog-title">{tx('Choose a point on the map')}</h2></div><button className="report-dialog-close" type="button" aria-label={tx('Close map')} onClick={() => setMapOpen(false)}>×</button></div>
           <p className="location-map-help">{tx('Click the map, or paste a Zoom Earth map URL to import its map center. Open-Meteo resolves the IANA timezone when you apply the point.')}</p>
           <div className="zoom-earth-import"><label htmlFor="zoom-earth-url">{tx('ZOOM EARTH MAP URL')}</label><div><input id="zoom-earth-url" type="url" value={zoomEarthUrl} onChange={(event) => setZoomEarthUrl(event.target.value)} placeholder="https://zoom.earth/maps/satellite/#view=..." /><button type="button" onClick={importZoomEarthLocation}>{tx('Import')}</button></div>{zoomEarthError && <span role="alert">{zoomEarthError}</span>}</div>
           {mapOpen && <LocationPicker point={mapPoint} onSelect={setMapPoint} />}
@@ -975,6 +982,32 @@ function App() {
     </main>
   ) : (
     <main className="location-start-shell">
+      <div className="topography-backdrop" aria-hidden="true">
+        <Topography
+          color="#ffffff"
+          lineCount={18}
+          lineWidth={0.5}
+          elevation={0.2}
+          foreground={0.2}
+          tilt={90}
+          speed={0.09}
+          direction="forward"
+          glow={0.55}
+          depthOfField={0}
+          fog={0.63}
+          hoverEffect="light"
+          clickEffect="pulse"
+          scale={1.25}
+          detail={0.34}
+          morph={0.28}
+          brightness={0.55}
+          markers="plus"
+          mouseRadius={2.5}
+          mouseStrength={0}
+          parallax={1}
+          style={{ width: '100%', height: '100%' }}
+        />
+      </div>
       <header className="location-start-header"><a className="brand" href="#location-start" aria-label={tx('NRG home')}><span className="brand-mark"><PulseIcon /></span><span>NRG</span></a><label className="language-control"><span className="sr-only">{t('language')}</span><select aria-label={t('language')} value={language} onChange={(event) => { if (isLanguageCode(event.target.value)) setLanguage(event.target.value) }}>{Object.entries(languages).map(([code, item]) => <option key={code} value={code}>{item.label}</option>)}</select></label><span>{t('setup')}</span></header>
       <section className="location-start-content" id="location-start">
         <div className="eyebrow"><span className="eyebrow-line" /> {t('firstLocation')}</div>
@@ -988,7 +1021,7 @@ function App() {
           <button className="location-start-submit" type="button" disabled={locationLoading} onClick={() => void applyMapLocation(true)}>{locationLoading ? 'Loading saved location…' : 'Resolve timezone & open dashboard'}</button>
         </div>
       </section>
-      <footer className="location-start-footer">NRG · Automated forecasts begin after location setup</footer>
+      <footer className="location-start-footer">NRG · {tx('Automated forecasts begin after location setup')}</footer>
     </main>
   )
 }
@@ -997,12 +1030,12 @@ function MetricCard({ label, value, unit, note, tone, icon, badge }: { label: st
   return <article className={`metric-card metric-${tone}`}><div className="metric-card-top"><span>{label}</span><span className="metric-icon">{icon}</span></div><div className="metric-value">{value}<small>{unit}</small></div><div className="metric-bottom"><span>{note}</span><SourceBadge source={badge} /></div></article>
 }
 
-function InsightItem({ item, language }: { item: Record<string, unknown>; language: LanguageCode }) {
+function InsightItem({ item, language, timeZone }: { item: Record<string, unknown>; language: LanguageCode; timeZone: string }) {
   const tx = (text: string) => translateText(language, text)
   const type = asText(item.type)
   if (type === 'biggest_saving') return <div className="insight-item"><span className="insight-icon insight-green"><LeafIcon /></span><div><span>{tx('BIGGEST SAVING')}</span><strong>{asNumber(item.saving_g).toFixed(0)} gCO₂ <small>· load #{asText(item.load_id, '—')}</small></strong></div></div>
-  if (type === 'cleanest_window_tomorrow') return <div className="insight-item"><span className="insight-icon insight-yellow"><SunIcon /></span><div><span>{tx('CLEANEST WINDOW · TOMORROW')}</span><strong>{formatTime(item.timestamp, undefined, languages[language].locale)} <small>· {item.intensity_gco2_kwh == null ? '—' : `${Math.round(asNumber(item.intensity_gco2_kwh))} gCO₂/kWh`}</small></strong></div></div>
-  return <div className="insight-item"><span className="insight-icon insight-orange"><BoltIcon /></span><div><span>{tx('HIGHEST INTENSITY FORECAST')}</span><strong>{formatTime(item.timestamp, undefined, languages[language].locale)} <small>· {item.intensity_gco2_kwh == null ? '—' : `${Math.round(asNumber(item.intensity_gco2_kwh))} gCO₂/kWh`}</small></strong></div></div>
+  if (type === 'cleanest_window_tomorrow') return <div className="insight-item"><span className="insight-icon insight-yellow"><SunIcon /></span><div><span>{tx('CLEANEST WINDOW · TOMORROW')}</span><strong>{formatTime(item.timestamp, undefined, languages[language].locale, timeZone)} <small>· {item.intensity_gco2_kwh == null ? '—' : `${Math.round(asNumber(item.intensity_gco2_kwh))} gCO₂/kWh`}</small></strong></div></div>
+  return <div className="insight-item"><span className="insight-icon insight-orange"><BoltIcon /></span><div><span>{tx('HIGHEST INTENSITY FORECAST')}</span><strong>{formatTime(item.timestamp, undefined, languages[language].locale, timeZone)} <small>· {item.intensity_gco2_kwh == null ? '—' : `${Math.round(asNumber(item.intensity_gco2_kwh))} gCO₂/kWh`}</small></strong></div></div>
 }
 
 function EmptyState({ state, label, language }: { state: ViewState; label: string; language: LanguageCode }) {
@@ -1014,6 +1047,7 @@ function EmptyState({ state, label, language }: { state: ViewState; label: strin
 
 function SourceBadge({ source }: { source: string }) {
   const normalized = source.toLowerCase()
+  if (normalized === 'simulated') return null
   return <span className={`source-badge source-${normalized}`}>{source}</span>
 }
 
