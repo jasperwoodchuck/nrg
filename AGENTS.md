@@ -285,6 +285,8 @@ Do not claim a build succeeds without actually running it.
 
 Do not make destructive Git operations unless explicitly requested.
 
+Commit every change to `AGENTS.md` immediately after making it. Stage only `AGENTS.md` for that commit so unrelated working-tree changes remain untouched.
+
 Never run commands such as:
 
 ```bash
