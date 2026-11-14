@@ -18,6 +18,14 @@ The API creates its SQLite database and seeds demo history on startup. OpenAPI i
 
 Copy `backend/.env.example` to `backend/.env` (or export variables in the process environment). Set the frontend API URL in `frontend/.env` using `frontend/.env.example`. Set `FRONTEND_ORIGIN` in the backend environment to the browser origin if it differs from `http://localhost:5173`. Defaults target Kolkata, India. The location selector includes cities across all Indian states and union territories; the map picker accepts any coordinates and asks Open-Meteo to resolve their IANA timezone. You can import coordinates by pasting a Zoom Earth map URL or open the selected point in Zoom Earth. `DATABASE_URL` defaults to a local SQLite file. The India grid anchor and fallback model coefficients can be adjusted using the documented variables. `ELECTRICITY_MAPS_API_KEY` is reserved for optional integration; this MVP currently relies on the fallback intensity model.
 
+## Deploy the frontend to Vercel
+
+This repository's Vercel project should use `frontend` as its **Root Directory**. Vercel can use the existing Bun lockfile and Vite setup; the build command is `bun run build` and the output directory is `dist`. `frontend/vercel.json` rewrites SPA routes to `index.html` so direct links and refreshes continue to load the app, following [Vercel's Vite SPA guidance](https://vercel.com/docs/frameworks/frontend/vite).
+
+Set `VITE_API_BASE_URL` in the Vercel project environment to the public API base URL, including `/api/v1` (for example, `https://api.example.com/api/v1`). Set it for each Vercel environment you will deploy. Vite embeds this value during the build, so redeploy after changing it. Do not put backend secrets in `VITE_*` variables.
+
+Deploy the API separately on a service that supports the included `backend/Dockerfile`, with a durable database configured through `DATABASE_URL`. The API starts a background scheduler and defaults to a local SQLite file, so the static Vercel frontend deployment does not provide the persistent backend runtime this project expects. Set backend `FRONTEND_ORIGIN` to the exact production site origin so browser requests pass the current CORS allowlist. The backend currently accepts one exact origin; Vercel preview domains need corresponding CORS support/configuration before they can call the API.
+
 ## Demo
 
 Start the API and request `/api/v1/impact/summary`, `/api/v1/forecast`, `/api/v1/schedule`, and `/api/v1/health`. The scheduler collects weather, plans pending virtual loads, marks due windows complete, refreshes impact data, and writes a template daily report. `POST /api/v1/sim/control?action=stop|start|reseed|reset-demo` is only for demo operators. With upstream access unavailable, cached weather is used, then a deterministic fallback forecast is generated.
