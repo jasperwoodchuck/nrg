@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +12,7 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://localhost:5173"
     electricity_maps_api_key: str | None = None
     gemini_api_key: str | None = None
+    gemini_model: str = Field(default="gemini-3.5-flash-lite", pattern=r"^[a-z0-9.-]+$")
     india_grid_average_gco2_kwh: float = 700.0
     solar_reduction_fraction: float = 0.42
     wind_reduction_fraction: float = 0.12

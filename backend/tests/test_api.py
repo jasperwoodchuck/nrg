@@ -131,7 +131,31 @@ def test_expected_write_routes_are_registered(api_db_session):
         "/api/v1/scenario/run",
         "/api/v1/mobility/estimate",
         "/api/v1/insights/ai",
+        "/api/v1/energy/usage/analyze",
     }
+
+
+def test_energy_usage_analysis_calculates_meter_and_appliance_statistics(monkeypatch):
+    from app.main import EnergyUsageInput, analyze_energy_usage
+
+    monkeypatch.setattr("app.main.generate_energy_usage_insight", lambda facts, language: "Shift high-use appliances to lower-use hours.")
+    request = EnergyUsageInput(
+        consumed_kwh=1000,
+        period_days=30,
+        tariff_inr_per_kwh=8,
+        language="en",
+        appliances=[{"name": "Air conditioner", "rated_watts": 1000, "quantity": 2, "hours_per_day": 3}],
+    )
+
+    result = analyze_energy_usage(request)
+
+    assert result["source"] == "GEMINI"
+    assert result["analysis"] == "Shift high-use appliances to lower-use hours."
+    assert result["statistics"]["daily_average_kwh"] == round(1000 / 30, 2)
+    assert result["statistics"]["estimated_appliance_kwh"] == 180
+    assert result["statistics"]["estimated_appliance_percent_of_meter"] == 18
+    assert result["statistics"]["unaccounted_kwh"] == 820
+    assert result["statistics"]["estimated_cost_inr"] == 8000
 
 
 def test_legacy_asgi_import_reexports_current_api():

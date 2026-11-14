@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import Crosshair from './component/Crosshair.jsx'
 import LocationPicker, { type LocationPoint } from './component/LocationPicker'
 import Topography from './component/Topography.jsx'
@@ -44,6 +44,23 @@ type MobilityEstimate = {
   baseline: { mode_name: string; factor_basis: string; emissions_kgco2e_per_week: number }
   selected: { mode_name: string; factor_basis: string; emissions_kgco2e_per_week: number }
   net_reduction_kgco2e_per_week: number
+}
+type UsageAppliance = { id: number; name: string; ratedWatts: string; quantity: string; hoursPerDay: string }
+type EnergyUsageAnalysis = {
+  analysis: string
+  statistics: {
+    consumed_kwh: number
+    period_days: number
+    daily_average_kwh: number
+    estimated_appliance_kwh: number
+    estimated_appliance_percent_of_meter: number
+    unaccounted_kwh: number
+    appliance_overage_kwh: number
+    estimated_co2_kg: number
+    emission_factor_gco2_per_kwh: number
+    estimated_cost_inr: number | null
+    appliances: Array<{ name: string; rated_watts: number; quantity: number; hours_per_day: number; estimated_kwh: number }>
+  }
 }
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1').replace(/\/$/, '')
@@ -105,10 +122,19 @@ const loadProfileEndTime = Date.now()
 const dashboardTabs = [
   ['overview', 'Overview'],
   ['power', 'Power'],
+  ['usage', 'Power use'],
   ['weather', 'Weather'],
   ['environment', 'Environment'],
   ['mobility', 'Mobility'],
   ['reports', 'Reports'],
+] as const
+const commonAppliances = [
+  { name: 'Air conditioner', watts: '1500' }, { name: 'Refrigerator', watts: '150' },
+  { name: 'Ceiling fan', watts: '75' }, { name: 'LED bulb', watts: '9' },
+  { name: 'Television', watts: '100' }, { name: 'Washing machine', watts: '500' },
+  { name: 'Water heater', watts: '2000' }, { name: 'Laptop', watts: '65' },
+  { name: 'Microwave', watts: '1200' }, { name: 'Water pump', watts: '750' },
+  { name: 'Induction cooktop', watts: '1800' }, { name: 'Other appliance', watts: '100' },
 ] as const
 
 const hourlyLoadProfile = Array.from({ length: 168 }, (_, index) => {
@@ -248,6 +274,31 @@ function parseMobilityEstimate(value: unknown): MobilityEstimate | null {
   }
 }
 
+function parseEnergyUsageAnalysis(value: unknown): EnergyUsageAnalysis | null {
+  if (!isRecord(value) || typeof value.analysis !== 'string' || !isRecord(value.statistics)) return null
+  const stats = value.statistics
+  const applianceValues = stats.appliances
+  if (!Array.isArray(applianceValues)) return null
+  const numericKeys = ['consumed_kwh', 'period_days', 'daily_average_kwh', 'estimated_appliance_kwh', 'estimated_appliance_percent_of_meter', 'unaccounted_kwh', 'appliance_overage_kwh', 'estimated_co2_kg', 'emission_factor_gco2_per_kwh'] as const
+  if (numericKeys.some((key) => typeof stats[key] !== 'number' || !Number.isFinite(stats[key]))) return null
+  if (stats.estimated_cost_inr !== null && (typeof stats.estimated_cost_inr !== 'number' || !Number.isFinite(stats.estimated_cost_inr))) return null
+  const appliances: EnergyUsageAnalysis['statistics']['appliances'] = []
+  for (const item of applianceValues) {
+    if (!isRecord(item) || typeof item.name !== 'string' || ['rated_watts', 'quantity', 'hours_per_day', 'estimated_kwh'].some((key) => typeof item[key] !== 'number' || !Number.isFinite(item[key]))) return null
+    appliances.push({ name: item.name, rated_watts: Number(item.rated_watts), quantity: Number(item.quantity), hours_per_day: Number(item.hours_per_day), estimated_kwh: Number(item.estimated_kwh) })
+  }
+  return {
+    analysis: value.analysis,
+    statistics: {
+      consumed_kwh: Number(stats.consumed_kwh), period_days: Number(stats.period_days), daily_average_kwh: Number(stats.daily_average_kwh),
+      estimated_appliance_kwh: Number(stats.estimated_appliance_kwh), estimated_appliance_percent_of_meter: Number(stats.estimated_appliance_percent_of_meter),
+      unaccounted_kwh: Number(stats.unaccounted_kwh), appliance_overage_kwh: Number(stats.appliance_overage_kwh), estimated_co2_kg: Number(stats.estimated_co2_kg),
+      emission_factor_gco2_per_kwh: Number(stats.emission_factor_gco2_per_kwh),
+      estimated_cost_inr: stats.estimated_cost_inr === null ? null : Number(stats.estimated_cost_inr), appliances,
+    },
+  }
+}
+
 function asList(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
@@ -283,13 +334,21 @@ function App() {
   const tx = (text: string) => translateText(language, text)
   const formatDate = (value: unknown, options?: Intl.DateTimeFormatOptions) => formatTime(value, options, languages[language].locale, locationTimezone)
   const [showDashboard, setShowDashboard] = useState(false)
-  const [activeDashboardTab, setActiveDashboardTab] = useState<'overview' | 'power' | 'weather' | 'environment' | 'mobility' | 'reports'>('overview')
+  const [activeDashboardTab, setActiveDashboardTab] = useState<'overview' | 'power' | 'usage' | 'weather' | 'environment' | 'mobility' | 'reports'>('overview')
   const [mobilityDistance, setMobilityDistance] = useState('8')
   const [mobilityDays, setMobilityDays] = useState(5)
   const [mobilityMode, setMobilityMode] = useState('local_bus')
   const [mobilityEstimate, setMobilityEstimate] = useState<MobilityEstimate | null>(null)
   const [mobilityLoading, setMobilityLoading] = useState(false)
   const [mobilityError, setMobilityError] = useState<string | null>(null)
+  const [usageKwh, setUsageKwh] = useState('')
+  const [usagePeriodDays, setUsagePeriodDays] = useState('30')
+  const [usageTariff, setUsageTariff] = useState('')
+  const [usageAppliances, setUsageAppliances] = useState<UsageAppliance[]>([])
+  const nextApplianceId = useRef(0)
+  const [usageAnalysis, setUsageAnalysis] = useState<EnergyUsageAnalysis | null>(null)
+  const [usageLoading, setUsageLoading] = useState(false)
+  const [usageError, setUsageError] = useState<string | null>(null)
   const dashboardTabsRef = useRef<HTMLElement>(null)
   const dashboardTabButtonsRef = useRef<Array<HTMLButtonElement | null>>([])
   const [tabIndicator, setTabIndicator] = useState({ left: 5, width: 0 })
@@ -433,6 +492,45 @@ function App() {
     } finally {
       setMobilityLoading(false)
     }
+  }
+
+  const addUsageAppliance = () => {
+    setUsageAppliances((current) => [...current, { id: nextApplianceId.current++, name: '', ratedWatts: '', quantity: '1', hoursPerDay: '' }])
+    setUsageAnalysis(null)
+  }
+
+  const analyzeUsage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setUsageLoading(true)
+    setUsageError(null)
+    setUsageAnalysis(null)
+    try {
+      const result = parseEnergyUsageAnalysis(await postJson('/energy/usage/analyze', {
+        consumed_kwh: Number(usageKwh),
+        period_days: Number(usagePeriodDays),
+        tariff_inr_per_kwh: usageTariff.trim() ? Number(usageTariff) : null,
+        language,
+        appliances: usageAppliances.map(({ name, ratedWatts, quantity, hoursPerDay }) => ({ name, rated_watts: Number(ratedWatts), quantity: Number(quantity), hours_per_day: Number(hoursPerDay) })),
+      }))
+      if (!result) throw new Error('The server returned an unexpected energy analysis.')
+      setUsageAnalysis(result)
+    } catch (error) {
+      setUsageError(error instanceof Error ? error.message : 'Could not analyze household energy use.')
+    } finally {
+      setUsageLoading(false)
+    }
+  }
+
+  const updateUsageAppliance = (id: number, field: keyof Omit<UsageAppliance, 'id'>, value: string) => {
+    setUsageAnalysis(null)
+    setUsageAppliances((current) => current.map((item) => {
+      if (item.id !== id) return item
+      if (field === 'name') {
+        const preset = commonAppliances.find((appliance) => appliance.name === value)
+        return { ...item, name: value, ratedWatts: preset?.watts ?? item.ratedWatts }
+      }
+      return { ...item, [field]: value }
+    }))
   }
 
   useEffect(() => {
@@ -833,7 +931,7 @@ function App() {
             </div> : <EmptyState language={language} state={data.insights} label={tx('Insights')} />}
             <div className="ai-insight">
               <div className="ai-insight-heading">
-                <span>{tx('AI GRID INSIGHT')}</span>
+                <div className="ai-insight-title"><GeminiBrand /><span>{tx('AI GRID INSIGHT')}</span></div>
                 <button className="refresh-button" type="button" onClick={() => void generateAiInsight()} disabled={aiInsightLoading}>
                   {aiInsightLoading ? tx('Generating…') : aiInsight ? tx('Regenerate') : tx('Generate insight')}
                 </button>
@@ -870,6 +968,45 @@ function App() {
             <div className="fleet-foot"><span className="fleet-dot" /> {tx('All devices are virtual · no hardware connected')}</div>
           </article>
         </section>
+        </div>
+
+        <div id="dashboard-panel-usage" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-usage" hidden={activeDashboardTab !== 'usage'}>
+          <section className="panel usage-panel" aria-labelledby="usage-heading">
+            <div className="panel-heading"><div><div className="section-kicker">{tx('HOUSEHOLD POWER')}</div><h2 id="usage-heading">{tx('Analyze your electricity use')}</h2></div><span className="sparkle">✳</span></div>
+            <p className="usage-intro">{tx('Enter the electricity use from your bill and the appliances you use. Gemini will analyze patterns; device energy is estimated from ratings and daily hours.')}</p>
+            <form className="usage-form" onSubmit={(event) => void analyzeUsage(event)}>
+              <div className="usage-inputs">
+                <label>{tx('Electricity used')} (kWh)<input type="number" min="0.1" max="50000" step="0.1" required value={usageKwh} onChange={(event) => { setUsageKwh(event.target.value); setUsageAnalysis(null) }} /></label>
+                <label>{tx('Billing period')} ({tx('days')})<input type="number" min="1" max="366" step="1" required value={usagePeriodDays} onChange={(event) => { setUsagePeriodDays(event.target.value); setUsageAnalysis(null) }} /></label>
+                <label>{tx('Optional electricity tariff')}<span><input type="number" min="0.01" max="100" step="0.01" value={usageTariff} onChange={(event) => { setUsageTariff(event.target.value); setUsageAnalysis(null) }} placeholder={tx('INR per kWh')} /><small>₹/kWh</small></span></label>
+              </div>
+              <div className="usage-appliances-heading"><strong>{tx('Appliances you use')}</strong><button className="usage-add-button" type="button" onClick={addUsageAppliance}>＋ {tx('Add an appliance')}</button></div>
+              <datalist id="usage-appliance-types">{commonAppliances.map((item) => <option key={item.name} value={item.name} label={tx(item.name)} />)}</datalist>
+              <div className="usage-appliance-list">
+                {usageAppliances.map((appliance) => <div className="usage-appliance-row" key={appliance.id}>
+                  <label>{tx('Appliance')}<input list="usage-appliance-types" required placeholder={tx('Choose an appliance or enter a custom name')} value={appliance.name} onChange={(event) => updateUsageAppliance(appliance.id, 'name', event.target.value)} /></label>
+                  <label>{tx('Rated power')} (W)<input type="number" min="1" max="20000" step="1" required value={appliance.ratedWatts} onChange={(event) => updateUsageAppliance(appliance.id, 'ratedWatts', event.target.value)} /></label>
+                  <label>{tx('Quantity')}<input type="number" min="1" max="100" step="1" required value={appliance.quantity} onChange={(event) => updateUsageAppliance(appliance.id, 'quantity', event.target.value)} /></label>
+                  <label>{tx('Hours per day')}<input type="number" min="0" max="24" step="0.1" required value={appliance.hoursPerDay} onChange={(event) => updateUsageAppliance(appliance.id, 'hoursPerDay', event.target.value)} /></label>
+                  <button className="usage-remove-button" type="button" aria-label={`${tx('Remove')} ${tx(appliance.name)}`} onClick={() => { setUsageAppliances((current) => current.filter((item) => item.id !== appliance.id)); setUsageAnalysis(null) }}>×</button>
+                </div>)}
+                {!usageAppliances.length && <p className="usage-no-appliances">{tx('Add the appliances you use to get an estimated breakdown.')}</p>}
+              </div>
+              <button className="mobility-submit usage-submit" type="submit" disabled={usageLoading || !usageAppliances.length}><GeminiMark />{usageLoading ? tx('Analyzing…') : tx('Analyze with Gemini')}</button>
+            </form>
+            {usageError && <p className="mobility-error" role="alert">{usageError}</p>}
+            {usageAnalysis && <div className="usage-result" aria-live="polite">
+              <div className="usage-stat-grid">
+                <div><span>{tx('Average per day')}</span><strong>{usageAnalysis.statistics.daily_average_kwh.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })} <small>kWh</small></strong></div>
+                <div><span>{tx('Appliance estimate')}</span><strong>{usageAnalysis.statistics.estimated_appliance_kwh.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })} <small>kWh</small></strong><small>{usageAnalysis.statistics.estimated_appliance_percent_of_meter.toLocaleString(languages[language].locale, { maximumFractionDigits: 1 })}% {tx('share of meter use')}</small></div>
+                <div><span>{tx('Estimated emissions')}</span><strong>{usageAnalysis.statistics.estimated_co2_kg.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })} <small>kgCO₂</small></strong><small>{tx('Grid-average factor')}: {usageAnalysis.statistics.emission_factor_gco2_per_kwh} gCO₂/kWh</small></div>
+                {usageAnalysis.statistics.estimated_cost_inr !== null && <div><span>{tx('Estimated bill')}</span><strong>₹{usageAnalysis.statistics.estimated_cost_inr.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })}</strong></div>}
+              </div>
+              <div className="usage-analysis-copy"><div className="usage-analysis-title"><GeminiBrand /><span className="section-kicker">{tx('ENERGY ANALYSIS')}</span></div><p>{usageAnalysis.analysis}</p></div>
+              <div className="usage-breakdown"><h3>{tx('Appliance energy estimates')}</h3><div>{usageAnalysis.statistics.appliances.map((item, index) => <div key={`${item.name}-${index}`}><span>{tx(item.name)} · {item.quantity} × {item.rated_watts}W</span><strong>{item.estimated_kwh.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })} kWh</strong></div>)}</div></div>
+              <p className="usage-footnote">{tx('Appliance energy is estimated from rated power and daily hours, and may not match meter readings.')} {usageAnalysis.statistics.appliance_overage_kwh > 0 ? `${tx('Appliance estimates exceed meter by')} ${usageAnalysis.statistics.appliance_overage_kwh.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })} kWh.` : `${tx('Unallocated consumption')}: ${usageAnalysis.statistics.unaccounted_kwh.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })} kWh.`}</p>
+            </div>}
+          </section>
         </div>
 
         <div id="dashboard-panel-weather" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-weather" hidden={activeDashboardTab !== 'weather'}>
@@ -1091,6 +1228,18 @@ function DeviceIcon({ kind }: { kind: string }) {
   if (lower.includes('water')) return <DropIcon />
   if (lower.includes('ac')) return <SnowIcon />
   return <GridIcon />
+}
+
+function GeminiBrand() {
+  return <span className="gemini-brand"><GeminiMark /><span>Gemini</span></span>
+}
+
+function GeminiMark() {
+  const gradientId = useId().replaceAll(':', '')
+  return <svg className="gemini-mark" viewBox="0 0 24 24" aria-hidden="true">
+    <defs><linearGradient id={gradientId} x1="2" y1="3" x2="22" y2="21" gradientUnits="userSpaceOnUse"><stop stopColor="#4285F4" /><stop offset=".52" stopColor="#9B72CB" /><stop offset="1" stopColor="#D96570" /></linearGradient></defs>
+    <path d="M12 1C14.4 7.6 16.4 9.6 23 12 16.4 14.4 14.4 16.4 12 23 9.6 16.4 7.6 14.4 1 12 7.6 9.6 9.6 7.6 12 1Z" fill={`url(#${gradientId})`} />
+  </svg>
 }
 
 function PulseIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg> }

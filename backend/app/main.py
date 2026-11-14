@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, desc, select, update
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -22,6 +22,7 @@ from app.modules.ai.insights import (
     GEMINI_MODEL,
     GeminiInsightError,
     GeminiKeyMissingError,
+    generate_energy_usage_insight,
     generate_grid_insight,
 )
 from app.modules.impact.mobility import estimate_weekly_mobility
@@ -55,6 +56,29 @@ class MobilityEstimateInput(BaseModel):
     one_way_distance_km: float = Field(gt=0, le=500, allow_inf_nan=False)
     commute_days_per_week: int = Field(ge=1, le=7)
     mode: Literal["petrol_car", "electric_car", "motorbike", "local_bus", "national_rail"]
+
+
+class ApplianceUsageInput(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    rated_watts: float = Field(gt=0, le=20_000, allow_inf_nan=False)
+    quantity: int = Field(ge=1, le=100)
+    hours_per_day: float = Field(ge=0, le=24, allow_inf_nan=False)
+
+    @field_validator("name")
+    @classmethod
+    def appliance_name_must_not_be_blank(cls, value: str) -> str:
+        name = value.strip()
+        if not name:
+            raise ValueError("Appliance name cannot be blank")
+        return name
+
+
+class EnergyUsageInput(BaseModel):
+    consumed_kwh: float = Field(gt=0, le=50_000, allow_inf_nan=False)
+    period_days: int = Field(ge=1, le=366)
+    tariff_inr_per_kwh: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
+    language: Literal["en", "hi", "bn", "mr", "te", "ta", "gu"] = "en"
+    appliances: list[ApplianceUsageInput] = Field(min_length=1, max_length=20)
 
 
 @asynccontextmanager
@@ -170,6 +194,46 @@ def mobility_estimate(request: MobilityEstimateInput):
         request.commute_days_per_week,
         request.mode,
     )
+
+
+@app.post("/api/v1/energy/usage/analyze")
+def analyze_energy_usage(request: EnergyUsageInput):
+    appliance_rows = [
+        {
+            "name": appliance.name.strip(),
+            "rated_watts": appliance.rated_watts,
+            "quantity": appliance.quantity,
+            "hours_per_day": appliance.hours_per_day,
+            "estimated_kwh": round(appliance.rated_watts * appliance.quantity * appliance.hours_per_day * request.period_days / 1000, 2),
+        }
+        for appliance in request.appliances
+    ]
+    appliance_kwh = sum(row["estimated_kwh"] for row in appliance_rows)
+    estimated_co2_kg = request.consumed_kwh * settings.india_grid_average_gco2_kwh / 1000
+    tariff = request.tariff_inr_per_kwh
+    statistics = {
+        "consumed_kwh": round(request.consumed_kwh, 2),
+        "period_days": request.period_days,
+        "daily_average_kwh": round(request.consumed_kwh / request.period_days, 2),
+        "estimated_appliance_kwh": round(appliance_kwh, 2),
+        "estimated_appliance_percent_of_meter": round(appliance_kwh / request.consumed_kwh * 100, 1),
+        "unaccounted_kwh": round(max(0, request.consumed_kwh - appliance_kwh), 2),
+        "appliance_overage_kwh": round(max(0, appliance_kwh - request.consumed_kwh), 2),
+        "estimated_co2_kg": round(estimated_co2_kg, 2),
+        "emission_factor_gco2_per_kwh": settings.india_grid_average_gco2_kwh,
+        "estimated_cost_inr": round(request.consumed_kwh * tariff, 2) if tariff is not None else None,
+        "appliances": appliance_rows,
+    }
+    language_names = {"en": "English", "hi": "Hindi", "bn": "Bengali", "mr": "Marathi", "te": "Telugu", "ta": "Tamil", "gu": "Gujarati"}
+    try:
+        analysis = generate_energy_usage_insight(statistics, language_names[request.language])
+    except GeminiKeyMissingError as error:
+        raise HTTPException(503, "AI analysis is not configured. Set GEMINI_API_KEY on the backend.") from error
+    except GeminiInsightError as error:
+        logger.warning("Gemini energy usage analysis failed (%s)", type(error).__name__)
+        raise HTTPException(502, "Gemini could not analyze this energy use. Try again later.") from error
+
+    return {"source": "GEMINI", "model": GEMINI_MODEL, "analysis": analysis, "statistics": statistics}
 
 
 @app.get("/api/v1/impact/metrics/{key}")

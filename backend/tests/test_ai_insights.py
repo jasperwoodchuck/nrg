@@ -1,7 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.main import ai_insight
 from app.modules.ai import insights
 
@@ -15,6 +15,15 @@ class MockGeminiResponse:
 
     def json(self):
         return self.payload
+
+
+def test_gemini_model_is_environment_configurable_with_flash_lite_default(monkeypatch):
+    assert Settings.model_fields["gemini_model"].default == "gemini-3.5-flash-lite"
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.6-flash")
+    assert Settings(_env_file=None).gemini_model == "gemini-3.6-flash"
+    assert insights.GEMINI_MODEL == settings.gemini_model
+    assert insights.GEMINI_API_URL.endswith(f"/models/{settings.gemini_model}:generateContent")
+    assert Settings(_env_file=None, gemini_model="gemini-3.6-flash").gemini_model == "gemini-3.6-flash"
 
 
 def test_generate_grid_insight_uses_server_key_and_validates_text(monkeypatch):
