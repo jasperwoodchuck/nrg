@@ -322,3 +322,53 @@ td { font-size: 12px; }
 .location-start-footer { padding: 12px 0 22px; text-align: center; }
 :root[data-theme='dark'] .location-start-map-card { box-shadow: 0 18px 50px rgba(0, 0, 0, .24); }
 @media (max-width: 560px) { .location-start-shell { padding-inline: 14px; }.location-start-header { height: 60px; }.location-start-content { padding-top: 28px; }.location-start-copy { font-size: 12px; }.location-start-map-card { padding: 10px; }.location-start-map-card .location-map { height: 54vh; }.location-start-map-footer { align-items: flex-start; flex-direction: column; gap: 6px; }.location-start-submit { width: 100%; } }
+
+/* Increase supporting text across dashboard, dialogs, maps, and scenario views. */
+.brand { font-size: 22px; }
+.monitor-refresh, .water-quality-panel .panel-heading select { font-size: 13px; }
+.air-current-grid span { font-size: 12px; }
+.air-current-grid strong { font-size: 21px; }
+.air-current-grid small { font-size: 11px; }
+.environment-subheading strong { font-size: 14px; }
+.environment-subheading span, .water-data-note { font-size: 12px; }
+.environment-table th { font-size: 10px; }
+.environment-table td { font-size: 12px; }
+.water-station-heading strong { font-size: 13px; }
+.water-station-heading span, .water-station-heading time,
+.water-parameter-list span { font-size: 11px; }
+.water-empty-note { font-size: 14px; }
+.environment-note { font-size: 11px; }
+.location-timezone { font-size: 10px; }
+.location-timezone .source-badge { font-size: 9px; }
+.map-open-button, .map-apply-button { font-size: 12px; }
+.location-dialog-heading h2 { font-size: 22px; }
+.location-map-help { font-size: 13px; }
+.location-map-footer { font-size: 12px; }
+.zoom-earth-import > label { font-size: 10px; }
+.zoom-earth-import input, .zoom-earth-import button { font-size: 12px; }
+.zoom-earth-import > span { font-size: 11px; }
+.report-dialog-meta { font-size: 12px; }
+.scenario-intro h2 { font-size: 22px; }
+.scenario-intro p { font-size: 15px; }
+.scenario-controls label, .scenario-controls select, .scenario-run-button { font-size: 14px; }
+.scenario-error { font-size: 14px; }
+.scenario-summary > div > span { font-size: 11px; }
+.scenario-summary > div > strong { font-size: 22px; }
+.scenario-summary > div > strong small { font-size: 13px; }
+.scenario-summary > div > small, .scenario-emissions { font-size: 12px; }
+.scenario-decisions-heading { font-size: 14px; }
+.scenario-decisions-heading span { font-size: 12px; }
+.scenario-table th { font-size: 11px; }
+.scenario-table td { font-size: 13px; }
+.scenario-house, .scenario-methodology { font-size: 11px; }
+.location-start-header > span, .location-start-footer, .location-start-map-footer { font-size: 11px; }
+.location-start-content h1 { font-size: clamp(42px, 5.2vw, 58px); }
+.location-start-copy { font-size: 15px; }
+.location-start-error { font-size: 13px; }
+.location-start-submit { font-size: 13px; }
+@media (max-width: 560px) {
+  .environment-panel .panel-heading h2, .location-dialog-heading h2 { font-size: 19px; }
+  .location-start-copy { font-size: 14px; }
+  .scenario-summary > div > strong { font-size: 19px; }
+  .scenario-summary .scenario-impact strong { font-size: 23px; }
+}
