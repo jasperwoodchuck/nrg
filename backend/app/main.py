@@ -224,6 +224,8 @@ def analyze_energy_usage(request: EnergyUsageInput):
         "estimated_cost_inr": round(request.consumed_kwh * tariff, 2) if tariff is not None else None,
         "appliances": appliance_rows,
     }
+    appliance_fit = appliance_kwh / request.consumed_kwh
+    confidence_level = "high" if 0.85 <= appliance_fit <= 1.15 else "medium" if 0.65 <= appliance_fit <= 1.35 else "low"
     language_names = {"en": "English", "hi": "Hindi", "bn": "Bengali", "mr": "Marathi", "te": "Telugu", "ta": "Tamil", "gu": "Gujarati"}
     try:
         analysis = generate_energy_usage_insight(statistics, language_names[request.language])
@@ -233,7 +235,13 @@ def analyze_energy_usage(request: EnergyUsageInput):
         logger.warning("Gemini energy usage analysis failed (%s)", type(error).__name__)
         raise HTTPException(502, "Gemini could not analyze this energy use. Try again later.") from error
 
-    return {"source": "GEMINI", "model": GEMINI_MODEL, "analysis": analysis, "statistics": statistics}
+    return {
+        "source": "GEMINI",
+        "model": GEMINI_MODEL,
+        "analysis": analysis,
+        "confidence": {"level": confidence_level, "basis": "appliance_meter_fit"},
+        "statistics": statistics,
+    }
 
 
 @app.get("/api/v1/impact/metrics/{key}")
@@ -502,6 +510,14 @@ def ai_insight(session: Session = Depends(get_session)):
         "forecast_intensity_max_gco2_kwh": round(max((row.intensity for row in upcoming), default=0), 1) if upcoming else None,
         "forecast_data_sources": ", ".join(sorted({row.source for row in upcoming})) or None,
     }
+    sources = {row.source.upper() for row in upcoming}
+    live_forecast = bool(upcoming) and sources == {"LIVE"}
+    if len(upcoming) >= 18 and live_forecast and impact["loads_optimized"] >= 50:
+        confidence_level = "high"
+    elif len(upcoming) >= 8 and live_forecast and impact["loads_optimized"] > 0:
+        confidence_level = "medium"
+    else:
+        confidence_level = "low"
 
     try:
         text = generate_grid_insight(facts)
@@ -511,7 +527,14 @@ def ai_insight(session: Session = Depends(get_session)):
         logger.warning("Gemini insight generation failed (%s)", type(error).__name__)
         raise HTTPException(502, "Gemini could not generate an insight. Try again later.") from error
 
-    return {"source": "GEMINI", "model": GEMINI_MODEL, "generated_at": now.isoformat(), "insight": text, "facts": facts}
+    return {
+        "source": "GEMINI",
+        "model": GEMINI_MODEL,
+        "generated_at": now.isoformat(),
+        "insight": text,
+        "confidence": {"level": confidence_level, "basis": "forecast_coverage"},
+        "facts": facts,
+    }
 
 
 @app.get("/api/v1/reports/latest")

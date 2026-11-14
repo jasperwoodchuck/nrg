@@ -73,6 +73,15 @@ h1 span { color: #508366; }
 .ai-insight-copy { color: #52655a; }
 .ai-insight-error { color: #ad594b; }
 .ai-insight-note { color: #9ba49c; font: 9px var(--mono); }
+.ai-confidence { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 9px; margin-top: 8px; }
+.ai-confidence > span { border-radius: 4px; padding: 4px 6px; font: 650 9px var(--mono); letter-spacing: .25px; }
+.ai-confidence > small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.ai-confidence-high > span { background: #e8f2e7; color: #467450; }
+.ai-confidence-medium > span { background: #f5f0e3; color: #8b713e; }
+.ai-confidence-low > span { background: #f6eae7; color: #9d584c; }
+:root[data-theme='dark'] .ai-confidence-high > span { background: #263d2c; color: #a8d4ad; }
+:root[data-theme='dark'] .ai-confidence-medium > span { background: #3a3424; color: #ddc58d; }
+:root[data-theme='dark'] .ai-confidence-low > span { background: #412c29; color: #e1a79b; }
 :root[data-theme='dark'] .topography-backdrop { opacity: .2; filter: none; }
 :root[data-theme='dark'] .brand-mark { background: #263b2b; color: #9ad0a7; }
 :root[data-theme='dark'] .connection { color: #adbaaf; }

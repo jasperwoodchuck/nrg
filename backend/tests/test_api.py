@@ -156,6 +156,7 @@ def test_energy_usage_analysis_calculates_meter_and_appliance_statistics(monkeyp
     assert result["statistics"]["estimated_appliance_percent_of_meter"] == 18
     assert result["statistics"]["unaccounted_kwh"] == 820
     assert result["statistics"]["estimated_cost_inr"] == 8000
+    assert result["confidence"] == {"level": "low", "basis": "appliance_meter_fit"}
 
 
 def test_legacy_asgi_import_reexports_current_api():

@@ -46,8 +46,10 @@ type MobilityEstimate = {
   net_reduction_kgco2e_per_week: number
 }
 type UsageAppliance = { id: number; name: string; ratedWatts: string; quantity: string; hoursPerDay: string }
+type DataConfidence = { level: 'low' | 'medium' | 'high'; basis: 'appliance_meter_fit' | 'forecast_coverage' }
 type EnergyUsageAnalysis = {
   analysis: string
+  confidence: DataConfidence
   statistics: {
     consumed_kwh: number
     period_days: number
@@ -275,7 +277,9 @@ function parseMobilityEstimate(value: unknown): MobilityEstimate | null {
 }
 
 function parseEnergyUsageAnalysis(value: unknown): EnergyUsageAnalysis | null {
-  if (!isRecord(value) || typeof value.analysis !== 'string' || !isRecord(value.statistics)) return null
+  if (!isRecord(value) || typeof value.analysis !== 'string' || !isRecord(value.statistics) || !isRecord(value.confidence)) return null
+  const confidence = parseDataConfidence(value.confidence)
+  if (!confidence) return null
   const stats = value.statistics
   const applianceValues = stats.appliances
   if (!Array.isArray(applianceValues)) return null
@@ -289,6 +293,7 @@ function parseEnergyUsageAnalysis(value: unknown): EnergyUsageAnalysis | null {
   }
   return {
     analysis: value.analysis,
+    confidence,
     statistics: {
       consumed_kwh: Number(stats.consumed_kwh), period_days: Number(stats.period_days), daily_average_kwh: Number(stats.daily_average_kwh),
       estimated_appliance_kwh: Number(stats.estimated_appliance_kwh), estimated_appliance_percent_of_meter: Number(stats.estimated_appliance_percent_of_meter),
@@ -297,6 +302,11 @@ function parseEnergyUsageAnalysis(value: unknown): EnergyUsageAnalysis | null {
       estimated_cost_inr: stats.estimated_cost_inr === null ? null : Number(stats.estimated_cost_inr), appliances,
     },
   }
+}
+
+function parseDataConfidence(value: unknown): DataConfidence | null {
+  if (!isRecord(value) || (value.level !== 'low' && value.level !== 'medium' && value.level !== 'high') || (value.basis !== 'appliance_meter_fit' && value.basis !== 'forecast_coverage')) return null
+  return { level: value.level, basis: value.basis }
 }
 
 function asList(value: unknown): unknown[] {
@@ -384,6 +394,7 @@ function App() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [aiInsight, setAiInsight] = useState<string | null>(null)
+  const [aiInsightConfidence, setAiInsightConfidence] = useState<DataConfidence | null>(null)
   const [aiInsightLoading, setAiInsightLoading] = useState(false)
   const [aiInsightError, setAiInsightError] = useState<string | null>(null)
 
@@ -464,10 +475,11 @@ function App() {
     setAiInsightError(null)
     try {
       const result = await postJson('/insights/ai', {})
-      if (!isRecord(result) || typeof result.insight !== 'string' || !result.insight.trim()) {
+      if (!isRecord(result) || typeof result.insight !== 'string' || !result.insight.trim() || !parseDataConfidence(result.confidence)) {
         throw new Error('The AI service returned an invalid insight.')
       }
       setAiInsight(result.insight)
+      setAiInsightConfidence(parseDataConfidence(result.confidence))
     } catch (error) {
       setAiInsightError(error instanceof Error ? error.message : 'Could not generate an AI insight.')
     } finally {
@@ -937,7 +949,7 @@ function App() {
                 </button>
               </div>
               {aiInsightError && <p className="ai-insight-error" role="alert">{aiInsightError}</p>}
-              {aiInsight && <p className="ai-insight-copy" aria-live="polite">{aiInsight}</p>}
+              {aiInsight && <><p className="ai-insight-copy" aria-live="polite">{aiInsight}</p>{aiInsightConfidence && <ConfidenceDisplay confidence={aiInsightConfidence} language={language} />}</>}
               <span className="ai-insight-note">{tx('AI-generated from simulated loads and forecast data.')}</span>
             </div>
             <div className="health-strip">
@@ -1002,7 +1014,7 @@ function App() {
                 <div><span>{tx('Estimated emissions')}</span><strong>{usageAnalysis.statistics.estimated_co2_kg.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })} <small>kgCO₂</small></strong><small>{tx('Grid-average factor')}: {usageAnalysis.statistics.emission_factor_gco2_per_kwh} gCO₂/kWh</small></div>
                 {usageAnalysis.statistics.estimated_cost_inr !== null && <div><span>{tx('Estimated bill')}</span><strong>₹{usageAnalysis.statistics.estimated_cost_inr.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })}</strong></div>}
               </div>
-              <div className="usage-analysis-copy"><div className="usage-analysis-title"><GeminiBrand /><span className="section-kicker">{tx('ENERGY ANALYSIS')}</span></div><p>{usageAnalysis.analysis}</p></div>
+              <div className="usage-analysis-copy"><div className="usage-analysis-title"><GeminiBrand /><span className="section-kicker">{tx('ENERGY ANALYSIS')}</span></div><p>{usageAnalysis.analysis}</p><ConfidenceDisplay confidence={usageAnalysis.confidence} language={language} /></div>
               <div className="usage-breakdown"><h3>{tx('Appliance energy estimates')}</h3><div>{usageAnalysis.statistics.appliances.map((item, index) => <div key={`${item.name}-${index}`}><span>{tx(item.name)} · {item.quantity} × {item.rated_watts}W</span><strong>{item.estimated_kwh.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })} kWh</strong></div>)}</div></div>
               <p className="usage-footnote">{tx('Appliance energy is estimated from rated power and daily hours, and may not match meter readings.')} {usageAnalysis.statistics.appliance_overage_kwh > 0 ? `${tx('Appliance estimates exceed meter by')} ${usageAnalysis.statistics.appliance_overage_kwh.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })} kWh.` : `${tx('Unallocated consumption')}: ${usageAnalysis.statistics.unaccounted_kwh.toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })} kWh.`}</p>
             </div>}
@@ -1210,6 +1222,12 @@ function EmptyState({ state, label, language }: { state: ViewState; label: strin
   if (state.status === 'loading') return <div className="empty-state"><span className="loading-spinner" /> {tx('Loading')} {label.toLowerCase()}…</div>
   if (state.status === 'error') return <div className="empty-state empty-error"><strong>{label} {tx('unavailable')}</strong><span>{state.error}. {tx('Check the API and CORS settings.')}</span></div>
   return <div className="empty-state">{tx('No')} {label.toLowerCase()} {tx('available yet')}.</div>
+}
+
+function ConfidenceDisplay({ confidence, language }: { confidence: DataConfidence; language: LanguageCode }) {
+  const tx = (text: string) => translateText(language, text)
+  const basis = confidence.basis === 'appliance_meter_fit' ? 'Based on estimated appliance use compared with bill consumption.' : 'Based on forecast coverage, forecast source, and simulated-load history.'
+  return <div className={`ai-confidence ai-confidence-${confidence.level}`}><span>{tx('Confidence level')}: {tx(confidence.level[0].toUpperCase() + confidence.level.slice(1))}</span><small>{tx(basis)}</small></div>
 }
 
 function SourceBadge({ source }: { source: string }) {
