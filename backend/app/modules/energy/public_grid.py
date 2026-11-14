@@ -69,9 +69,14 @@ def _fetch_public_grid(client: httpx.Client, state: str | None = None) -> dict[s
             ),
             None,
         )
-    if not isinstance(reading, dict) or reading.get("has_data") is not True or not _number(reading.get("demand_mw")):
-        raise ValueError(f"Public grid service returned no valid demand reading for {state or 'India'}")
-    if not isinstance(reading.get("timestamp"), str) or not isinstance(reading.get("source_type"), str):
+    if not isinstance(reading, dict):
+        if state:
+            reading = {}
+        else:
+            raise ValueError("Public grid service returned no valid All India demand reading")
+    if not state and (reading.get("has_data") is not True or not _number(reading.get("demand_mw"))):
+        raise ValueError("Public grid service returned no valid All India demand reading")
+    if not state and (not isinstance(reading.get("timestamp"), str) or not isinstance(reading.get("source_type"), str)):
         raise ValueError("Public grid service returned incomplete demand provenance")
 
     items = supply.get("items")
@@ -92,11 +97,8 @@ def _fetch_public_grid(client: httpx.Client, state: str | None = None) -> dict[s
         ),
         None,
     )
-    if daily_row is None or any(
-        not _number(daily_row.get(field))
-        for field in ("energy_met_mu", "energy_shortage_mu", "peak_demand_met_mw")
-    ):
-        raise ValueError(f"Public grid service returned no complete daily supply report for {state or 'India'}")
+    if daily_row is None and not state:
+        raise ValueError("Public grid service returned no complete All India supply report")
 
     return {
         "provider": "India Energy Atlas",
@@ -104,10 +106,11 @@ def _fetch_public_grid(client: httpx.Client, state: str | None = None) -> dict[s
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "stale": False,
         "snapshot": {
-            "name": reading.get("name", "India"),
-            "demand_mw": reading["demand_mw"],
-            "timestamp": reading["timestamp"],
-            "source_type": reading["source_type"],
+            "name": reading.get("name", state or "India"),
+            "has_data": reading.get("has_data") is True and _number(reading.get("demand_mw")),
+            "demand_mw": reading.get("demand_mw") if reading.get("has_data") is True and _number(reading.get("demand_mw")) else None,
+            "timestamp": reading.get("timestamp"),
+            "source_type": reading.get("source_type"),
             "source": reading.get("source"),
             "basis": reading.get("basis"),
             "age_minutes": reading.get("age_minutes"),
@@ -115,9 +118,9 @@ def _fetch_public_grid(client: httpx.Client, state: str | None = None) -> dict[s
         },
         "daily": {
             "date": latest_date,
-            "energy_met_mu": daily_row["energy_met_mu"],
-            "energy_shortage_mu": daily_row["energy_shortage_mu"],
-            "peak_demand_met_mw": daily_row["peak_demand_met_mw"],
+            "energy_met_mu": daily_row.get("energy_met_mu") if daily_row and _number(daily_row.get("energy_met_mu")) else None,
+            "energy_shortage_mu": daily_row.get("energy_shortage_mu") if daily_row and _number(daily_row.get("energy_shortage_mu")) else None,
+            "peak_demand_met_mw": daily_row.get("peak_demand_met_mw") if daily_row and _number(daily_row.get("peak_demand_met_mw")) else None,
         },
         "sources": {
             "live_demand": "https://npp.gov.in/",

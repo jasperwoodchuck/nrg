@@ -619,10 +619,12 @@ function App() {
   const formatGridValue = (value: unknown, digits = 1) => typeof value === 'number' && Number.isFinite(value)
     ? new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value)
     : '—'
-  const demandSource = publicGridSnapshot?.source_type === 'official' ? 'OFFICIAL' : 'PUBLIC'
-  const demandNote = publicGridSnapshot && typeof publicGridSnapshot.age_minutes === 'number'
-    ? `Grid reading · ${Math.round(publicGridSnapshot.age_minutes)} min old`
-    : 'Latest public grid reading'
+  const demandSource = publicGridSnapshot?.has_data === false ? 'NO READING' : publicGridSnapshot?.source_type === 'official' ? 'OFFICIAL' : 'PUBLIC'
+  const demandNote = publicGridSnapshot?.has_data === false
+    ? 'No current state demand reading'
+    : publicGridSnapshot && typeof publicGridSnapshot.age_minutes === 'number'
+      ? `Grid reading · ${Math.round(publicGridSnapshot.age_minutes)} min old`
+      : 'Latest public grid reading'
   const connected = Object.values(data).filter((item) => item.status === 'online').length
   const allConnected = connected === endpoints.length
 
