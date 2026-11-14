@@ -45,3 +45,13 @@ For each completed load `i`, energy remains unchanged before and after shifting:
 - Total kWh shifted: sum of energy of uniquely completed optimized loads. This is carbon-aware load shifting, **not energy reduction**.
 
 The optimizer considers contiguous hourly windows fully within the forecast and ends no later than the load deadline. It selects the candidate with the lowest average intensity. Completion is recorded once by changing the load state from `scheduled` to `completed`; only completed rows contribute to impact totals.
+
+## Sustainable mobility estimate
+
+The commute planner estimates a weekly round-trip commute using:
+
+`weekly kgCO2e = one-way distance (km) × 2 × commute days × mode factor (kgCO2e/km)`.
+
+It compares the selected mode with one traveler using an average petrol car. Factors are from the Tamil Nadu Green Climate Company *Guidance Manual for Sustainable Events*, Table 4 (land travel): petrol car 0.17 kgCO2e/vehicle-km, battery electric car 0.05 kgCO2e/vehicle-km, motorbike 0.11 kgCO2e/vehicle-km, local bus 0.10 kgCO2e/passenger-km, and national rail 0.04 kgCO2e/passenger-km ([source PDF](https://tngcc.tn.gov.in/wp-content/uploads/2025/10/Guidance-Manual-for-Sustainable-Events.pdf)).
+
+Private vehicle factors are applied per vehicle-kilometre and assume one traveler in the baseline vehicle; public transport factors are per passenger-kilometre. The manual's factors are used as indicative estimates, not location-specific or live measurements. The reported net reduction can be negative when the selected factor exceeds the baseline.

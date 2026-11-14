@@ -18,6 +18,7 @@ from app.db.database import Base, engine, get_session, SessionLocal
 from app.db.models import AppState, CacheRecord, ForecastRecord, Report, ScenarioRun, VirtualLoad
 from app.modules.impact.service import completed_rows, metric, range_start
 from app.modules.impact.engine import summarize
+from app.modules.impact.mobility import estimate_weekly_mobility
 from app.modules.environment.monitoring import get_air_quality, get_water_quality, water_quality_regions
 from app.modules.environment.waste import build_collection_plan
 from app.modules.energy.location import (
@@ -27,6 +28,7 @@ from app.modules.energy.location import (
     restore_location,
     weather_cache_key,
 )
+from app.modules.energy.public_grid import get_public_grid_data
 from app.collectors.open_meteo import _fallback_payload, cached_payload, collect_weather
 from app.optimizer.service import optimize_pending
 from app.optimizer.scenario import run_scenario
@@ -39,6 +41,12 @@ scheduler = BackgroundScheduler(timezone="UTC")
 class ScenarioInput(BaseModel):
     households: int = Field(default=30, ge=1, le=100)
     max_concurrent_loads: int = Field(default=12, ge=1, le=200)
+
+
+class MobilityEstimateInput(BaseModel):
+    one_way_distance_km: float = Field(gt=0, le=500, allow_inf_nan=False)
+    commute_days_per_week: int = Field(ge=1, le=7)
+    mode: Literal["petrol_car", "electric_car", "motorbike", "local_bus", "national_rail"]
 
 
 @asynccontextmanager
@@ -77,6 +85,14 @@ def get_location(session: Session = Depends(get_session)):
     mode = session.get(AppState, f"last_weather_mode:{cache_source}")
     source = mode.value if mode else "ESTIMATED"
     return {"location": current_location(), "weather_source": source, "timezone_source": source}
+
+
+@app.get("/api/v1/public/grid-snapshot")
+def public_grid_snapshot():
+    try:
+        return get_public_grid_data()
+    except RuntimeError as error:
+        raise HTTPException(502, str(error)) from error
 
 
 @app.post("/api/v1/location")
@@ -129,6 +145,15 @@ def impact_summary(range: str = Query("24h", pattern="^(24h|7d|30d)$"), session:
     def m(value, unit, formula):
         return metric(value, unit, {"range": range, "loads": data["loads_optimized"], "load_source": "SIMULATED", "intensity_source": "ESTIMATED"}, formula)
     return {"range": range, "methodology": "Carbon-aware load shifting; energy consumed is unchanged. Baseline A uses typical default time; baseline B uses the daily mean intensity.", "kg_co2_saved": m(data["saved_a_g"] / 1000, "kgCO2", "sum(baseline_a - optimized)/1000"), "percent_vs_baseline_a": m(data["percent_a"], "%", "100*saved_a/baseline_a"), "percent_vs_baseline_b": m(data["percent_b"], "%", "100*saved_b/baseline_b"), "loads_optimized": m(data["loads_optimized"], "loads", "count(completed optimized loads)"), "kwh_shifted": m(data["kwh_shifted"], "kWh", "sum(load energy)")}
+
+
+@app.post("/api/v1/mobility/estimate")
+def mobility_estimate(request: MobilityEstimateInput):
+    return estimate_weekly_mobility(
+        request.one_way_distance_km,
+        request.commute_days_per_week,
+        request.mode,
+    )
 
 
 @app.get("/api/v1/impact/metrics/{key}")

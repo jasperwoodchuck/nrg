@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import Crosshair from './component/Crosshair.jsx'
 import LocationPicker, { type LocationPoint } from './component/LocationPicker'
 import Topography from './component/Topography.jsx'
+import { languages, translate, type LanguageCode } from './i18n'
 import './App.css'
 
-type Metric = { value: number; unit: string; source: string }
 type EndpointStatus = 'loading' | 'online' | 'error'
 type ViewState = { payload: unknown; status: EndpointStatus; error?: string }
 type ScenarioDecision = {
@@ -36,6 +36,14 @@ type ScenarioResult = {
     co2_avoided_g: number
   }
   decisions: ScenarioDecision[]
+}
+type MobilityEstimate = {
+  factor_source: string
+  factor_source_url: string
+  methodology: string
+  baseline: { mode_name: string; factor_basis: string; emissions_kgco2e_per_week: number }
+  selected: { mode_name: string; factor_basis: string; emissions_kgco2e_per_week: number }
+  net_reduction_kgco2e_per_week: number
 }
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1').replace(/\/$/, '')
@@ -78,10 +86,7 @@ const locations = [
   { id: 'thiruvananthapuram', name: 'Thiruvananthapuram, Kerala', latitude: 8.4855, longitude: 76.94924 },
 ].map((location) => ({ ...location, timezone: indiaTimezone }))
 const endpoints = [
-  { key: 'saved', path: '/impact/metrics/co2_saved', label: 'CO₂ saved' },
-  { key: 'averageSaved', path: '/impact/metrics/co2_saved_baseline_b', label: 'Daily-average baseline' },
-  { key: 'shifted', path: '/impact/metrics/kwh_shifted', label: 'Energy shifted' },
-  { key: 'optimized', path: '/impact/metrics/loads_optimized', label: 'Loads optimized' },
+  { key: 'publicGrid', path: '/public/grid-snapshot', label: 'Public grid data' },
   { key: 'forecast', path: '/forecast', label: 'Forecast' },
   { key: 'schedule', path: '/schedule', label: 'Schedule' },
   { key: 'loads', path: '/loads', label: 'Virtual fleet' },
@@ -101,6 +106,7 @@ const dashboardTabs = [
   ['power', 'Power'],
   ['weather', 'Weather'],
   ['environment', 'Environment'],
+  ['mobility', 'Mobility'],
   ['reports', 'Reports'],
 ] as const
 
@@ -222,6 +228,25 @@ function parseScenarioResult(value: unknown): ScenarioResult | null {
   }
 }
 
+function parseMobilityEstimate(value: unknown): MobilityEstimate | null {
+  if (!isRecord(value) || !isRecord(value.baseline) || !isRecord(value.selected)) return null
+  const baselineKg = value.baseline.emissions_kgco2e_per_week
+  const selectedKg = value.selected.emissions_kgco2e_per_week
+  const netReduction = value.net_reduction_kgco2e_per_week
+  if (typeof value.factor_source !== 'string' || typeof value.factor_source_url !== 'string' || typeof value.methodology !== 'string') return null
+  if (typeof value.baseline.mode_name !== 'string' || typeof value.baseline.factor_basis !== 'string' || typeof baselineKg !== 'number' || !Number.isFinite(baselineKg)) return null
+  if (typeof value.selected.mode_name !== 'string' || typeof value.selected.factor_basis !== 'string' || typeof selectedKg !== 'number' || !Number.isFinite(selectedKg)) return null
+  if (typeof netReduction !== 'number' || !Number.isFinite(netReduction)) return null
+  return {
+    factor_source: value.factor_source,
+    factor_source_url: value.factor_source_url,
+    methodology: value.methodology,
+    baseline: { mode_name: value.baseline.mode_name, factor_basis: value.baseline.factor_basis, emissions_kgco2e_per_week: baselineKg },
+    selected: { mode_name: value.selected.mode_name, factor_basis: value.selected.factor_basis, emissions_kgco2e_per_week: selectedKg },
+    net_reduction_kgco2e_per_week: netReduction,
+  }
+}
+
 function asList(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
@@ -234,18 +259,12 @@ function asNumber(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
 
-function metricValue(payload: unknown): Metric | null {
-  if (!isRecord(payload) || typeof payload.value !== 'number') return null
-  return { value: payload.value, unit: asText(payload.unit, ''), source: asText(payload.source, 'UNKNOWN') }
-}
-
-function formatMetric(value: Metric | null, digits = 1): string {
-  if (!value) return '—'
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value.value)
-}
-
 function formatCo2Grams(grams: number): string {
   return Math.abs(grams) >= 1000 ? `${(grams / 1000).toFixed(2)} kgCO₂` : `${grams.toFixed(0)} gCO₂`
+}
+
+function isLanguageCode(value: string | null): value is LanguageCode {
+  return value !== null && Object.hasOwn(languages, value)
 }
 
 function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' }): string {
@@ -255,8 +274,19 @@ function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour
 }
 
 function App() {
+  const [language, setLanguage] = useState<LanguageCode>(() => {
+    const saved = window.localStorage.getItem('nrg-language')
+    return isLanguageCode(saved) ? saved : 'en'
+  })
+  const t = (key: Parameters<typeof translate>[1]) => translate(language, key)
   const [showDashboard, setShowDashboard] = useState(false)
-  const [activeDashboardTab, setActiveDashboardTab] = useState<'overview' | 'power' | 'weather' | 'environment' | 'reports'>('overview')
+  const [activeDashboardTab, setActiveDashboardTab] = useState<'overview' | 'power' | 'weather' | 'environment' | 'mobility' | 'reports'>('overview')
+  const [mobilityDistance, setMobilityDistance] = useState('8')
+  const [mobilityDays, setMobilityDays] = useState(5)
+  const [mobilityMode, setMobilityMode] = useState('local_bus')
+  const [mobilityEstimate, setMobilityEstimate] = useState<MobilityEstimate | null>(null)
+  const [mobilityLoading, setMobilityLoading] = useState(false)
+  const [mobilityError, setMobilityError] = useState<string | null>(null)
   const dashboardTabsRef = useRef<HTMLElement>(null)
   const dashboardTabButtonsRef = useRef<Array<HTMLButtonElement | null>>([])
   const [tabIndicator, setTabIndicator] = useState({ left: 5, width: 0 })
@@ -288,6 +318,11 @@ function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => window.localStorage.getItem('nrg-theme') === 'dark')
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+
+  useEffect(() => {
+    window.localStorage.setItem('nrg-language', language)
+    document.documentElement.lang = languages[language].locale
+  }, [language])
 
   useLayoutEffect(() => {
     const nav = dashboardTabsRef.current
@@ -350,6 +385,25 @@ function App() {
       setScenarioError(error instanceof Error ? error.message : 'Could not run the optimization scenario')
     } finally {
       setScenarioLoading(false)
+    }
+  }
+
+  const runMobilityEstimate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setMobilityLoading(true)
+    setMobilityError(null)
+    try {
+      const result = parseMobilityEstimate(await postJson('/mobility/estimate', {
+        one_way_distance_km: Number(mobilityDistance),
+        commute_days_per_week: mobilityDays,
+        mode: mobilityMode,
+      }))
+      if (!result) throw new Error('The server returned an unexpected mobility estimate.')
+      setMobilityEstimate(result)
+    } catch (error) {
+      setMobilityError(error instanceof Error ? error.message : 'Could not calculate the commute estimate')
+    } finally {
+      setMobilityLoading(false)
     }
   }
 
@@ -526,7 +580,18 @@ function App() {
   const latestReport = isRecord(latestPayload) && isRecord(latestPayload.report) ? latestPayload.report : null
   const healthRaw = payload('health')
   const healthPayload = isRecord(healthRaw) ? healthRaw : null
-  const sourceLabel = metricValue(payload('saved'))?.source ?? asText(isRecord(forecastPayload) ? forecastPayload.source : null, 'ESTIMATED')
+  const forecastSource = asText(isRecord(forecastPayload) ? forecastPayload.source : null, 'ESTIMATED')
+  const publicGridRaw = payload('publicGrid')
+  const publicGridPayload: Record<string, unknown> | null = isRecord(publicGridRaw) ? publicGridRaw : null
+  const publicGridSnapshot: Record<string, unknown> | null = publicGridPayload && isRecord(publicGridPayload.snapshot) ? publicGridPayload.snapshot : null
+  const publicGridDaily: Record<string, unknown> | null = publicGridPayload && isRecord(publicGridPayload.daily) ? publicGridPayload.daily : null
+  const formatGridValue = (value: unknown, digits = 1) => typeof value === 'number' && Number.isFinite(value)
+    ? new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value)
+    : '—'
+  const demandSource = publicGridSnapshot?.source_type === 'official' ? 'OFFICIAL' : 'PUBLIC'
+  const demandNote = publicGridSnapshot && typeof publicGridSnapshot.age_minutes === 'number'
+    ? `Grid reading · ${Math.round(publicGridSnapshot.age_minutes)} min old`
+    : 'Latest public grid reading'
   const connected = Object.values(data).filter((item) => item.status === 'online').length
   const allConnected = connected === endpoints.length
 
@@ -565,12 +630,13 @@ function App() {
           <span>NRG</span>
         </a>
         <div className="topbar-right">
-          <div className={`connection ${allConnected ? 'connection-good' : connected ? 'connection-partial' : 'connection-off'}`}>
+          <label className="language-control"><span className="sr-only">{t('language')}</span><select aria-label={t('language')} value={language} onChange={(event) => { if (isLanguageCode(event.target.value)) setLanguage(event.target.value) }}>{Object.entries(languages).map(([code, item]) => <option key={code} value={code}>{item.label}</option>)}</select></label>
+            <div className={`connection ${allConnected ? 'connection-good' : connected ? 'connection-partial' : 'connection-off'}`}>
             <span className="connection-dot" />
             {connected}/{endpoints.length} endpoints connected
           </div>
           <button className="refresh-button" type="button" onClick={() => void refresh()} disabled={refreshing}>
-            <RefreshIcon /> {refreshing ? 'Refreshing' : 'Refresh'}
+            <RefreshIcon /> {refreshing ? t('refreshing') : t('refresh')}
           </button>
           <span className="avatar">TP</span>
         </div>
@@ -585,27 +651,27 @@ function App() {
           </div>
           <div className="hero-side">
             <div className="hero-status-row">
-              <div className="live-pill"><span className="live-pulse" /> SYSTEM {healthPayload && healthPayload.status === 'ok' ? 'ACTIVE' : 'CONNECTING'}</div>
+              <div className="live-pill"><span className="live-pulse" /> SYSTEM {healthPayload && healthPayload.status === 'ok' ? t('active') : t('connecting')}</div>
               <button className="theme-toggle" type="button" aria-pressed={isDarkMode} aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => setIsDarkMode((current) => !current)}>
-                <ThemeIcon dark={isDarkMode} /> <span>{isDarkMode ? 'LIGHT' : 'DARK'}</span>
+                <ThemeIcon dark={isDarkMode} /> <span>{isDarkMode ? t('light') : t('dark')}</span>
               </button>
             </div>
             <label className="location-control">
-              <span className="location-label"><LocationIcon /> GRID LOCATION</span>
+              <span className="location-label"><LocationIcon /> {t('gridLocation')}</span>
               <select aria-label="Dashboard location" value={selectedLocationId} disabled={locationLoading} onChange={(event) => void changeLocation(event.target.value)}>
                 {selectedLocationId === 'custom' && <option value="custom" disabled>Current custom location</option>}
                 {locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
               </select>
               <span className="location-timezone">Timezone: {locationTimezone} <SourceBadge source={timezoneSource} /></span>
-              <button className="map-open-button" type="button" disabled={locationLoading} onClick={() => { setMapPoint(locationPoint); setMapOpen(true) }}>Choose on map</button>
+              <button className="map-open-button" type="button" disabled={locationLoading} onClick={() => { setMapPoint(locationPoint); setMapOpen(true) }}>{t('chooseMap')}</button>
               {locationError && <span className="location-error" role="alert">{locationError}</span>}
             </label>
           </div>
         </section>
 
-        <nav ref={dashboardTabsRef} className="dashboard-tabs" role="tablist" aria-label="Dashboard sections">
+        <nav ref={dashboardTabsRef} className="dashboard-tabs" role="tablist" aria-label={t('sections')}>
           <span className="dashboard-tab-indicator" aria-hidden="true" style={{ width: tabIndicator.width, transform: `translateX(${tabIndicator.left - 5}px)` }}><span key={activeDashboardTab} /></span>
-          {dashboardTabs.map(([tab, label], index) => <button ref={(element) => { dashboardTabButtonsRef.current[index] = element }} key={tab} id={`dashboard-tab-${tab}`} className="dashboard-tab" type="button" role="tab" aria-selected={activeDashboardTab === tab} aria-controls={`dashboard-panel-${tab}`} tabIndex={activeDashboardTab === tab ? 0 : -1} onClick={() => setActiveDashboardTab(tab)} onKeyDown={(event) => {
+          {dashboardTabs.map(([tab], index) => <button ref={(element) => { dashboardTabButtonsRef.current[index] = element }} key={tab} id={`dashboard-tab-${tab}`} className="dashboard-tab" type="button" role="tab" aria-selected={activeDashboardTab === tab} aria-controls={`dashboard-panel-${tab}`} tabIndex={activeDashboardTab === tab ? 0 : -1} onClick={() => setActiveDashboardTab(tab)} onKeyDown={(event) => {
             const currentIndex = dashboardTabs.findIndex(([item]) => item === tab)
             const nextIndex = event.key === 'ArrowRight' ? (currentIndex + 1) % dashboardTabs.length : event.key === 'ArrowLeft' ? (currentIndex - 1 + dashboardTabs.length) % dashboardTabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? dashboardTabs.length - 1 : -1
             if (nextIndex >= 0) {
@@ -614,16 +680,19 @@ function App() {
               setActiveDashboardTab(nextTab)
               document.getElementById(`dashboard-tab-${nextTab}`)?.focus()
             }
-          }}>{label}</button>)}
+          }}>{t(tab)}</button>)}
         </nav>
 
         <div id="dashboard-panel-overview" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-overview" hidden={activeDashboardTab !== 'overview'}>
-        <section className="metric-grid" aria-label="Impact metrics">
-          <MetricCard label="CO₂ AVOIDED" value={formatMetric(metricValue(payload('saved'))) } unit="gCO₂" note="vs typical-time baseline" tone="green" icon={<LeafIcon />} badge={sourceLabel} />
-          <MetricCard label="LOADS OPTIMIZED" value={formatMetric(metricValue(payload('optimized')), 0)} unit="loads" note="flexible demand scheduled" tone="cream" icon={<GridIcon />} badge="SIMULATED" />
-          <MetricCard label="ENERGY SHIFTED" value={formatMetric(metricValue(payload('shifted')))} unit="kWh" note="consumption unchanged" tone="lavender" icon={<BoltIcon />} badge="SIMULATED" />
-          <MetricCard label="DAILY AVG. SAVING" value={formatMetric(metricValue(payload('averageSaved')))} unit="gCO₂" note="conservative baseline" tone="blue" icon={<SunIcon />} badge="ESTIMATED" />
+        <section className="metric-grid" aria-label="Public India power grid data">
+          {publicGridPayload ? <>
+            <MetricCard label="ALL INDIA DEMAND" value={formatGridValue(publicGridSnapshot?.demand_mw, 0)} unit="MW" note={demandNote} tone="green" icon={<BoltIcon />} badge={demandSource} />
+            <MetricCard label="ENERGY MET · DAILY" value={formatGridValue(publicGridDaily?.energy_met_mu)} unit="MU" note={`Grid-India report · ${asText(publicGridDaily?.date)}`} tone="cream" icon={<GridIcon />} badge="GRID-INDIA" />
+            <MetricCard label="PEAK DEMAND MET" value={formatGridValue(publicGridDaily?.peak_demand_met_mw, 0)} unit="MW" note={`Official daily report · ${asText(publicGridDaily?.date)}`} tone="lavender" icon={<SunIcon />} badge="GRID-INDIA" />
+            <MetricCard label="ENERGY SHORTAGE" value={formatGridValue(publicGridDaily?.energy_shortage_mu)} unit="MU" note={`Reported daily shortage · ${asText(publicGridDaily?.date)}`} tone="blue" icon={<DropIcon />} badge="GRID-INDIA" />
+          </> : <EmptyState state={data.publicGrid} label="Public grid data" />}
         </section>
+        {publicGridPayload && <p className="public-grid-attribution">Demand: <a href="https://npp.gov.in/" target="_blank" rel="noreferrer">National Power Portal · MERIT</a> · Daily supply: <a href="https://grid-india.in/" target="_blank" rel="noreferrer">Grid-India</a> · data via <a href="https://www.energymap.in/developer/mcp/public" target="_blank" rel="noreferrer">India Energy Atlas</a>{publicGridPayload.stale === true ? ' · showing cached data' : ''}</p>}
 
         <section className="panel scenario-panel" aria-labelledby="scenario-heading">
           <div className="scenario-intro">
@@ -633,12 +702,12 @@ function App() {
               <p>Compare typical appliance timing with lower-carbon windows for a virtual household fleet in {selectedLocationId === 'custom' ? 'your selected location' : locations.find((item) => item.id === selectedLocationId)?.name ?? 'your selected location'}.</p>
             </div>
             <div className="scenario-controls">
-              <label htmlFor="scenario-households">Virtual households</label>
+              <label htmlFor="scenario-households">{t('virtualHomes')}</label>
               <select id="scenario-households" value={scenarioHouseholds} disabled={scenarioLoading} onChange={(event) => setScenarioHouseholds(Number(event.target.value))}>
                 {[10, 30, 60, 100].map((count) => <option key={count} value={count}>{count} homes</option>)}
               </select>
               <button className="scenario-run-button" type="button" onClick={() => void runOptimizationScenario()} disabled={scenarioLoading || locationLoading}>
-                {scenarioLoading ? 'Optimizing…' : scenarioResult ? 'Run again' : 'Run optimization'}
+                {scenarioLoading ? t('optimizing') : scenarioResult ? t('runAgain') : t('runOptimization')}
               </button>
             </div>
           </div>
@@ -665,7 +734,7 @@ function App() {
           <article className="panel forecast-panel">
               <div className="panel-heading">
               <div><div className="section-kicker">GRID CARBON FORECAST</div><h2>Cleaner hours ahead</h2></div>
-              <div className="panel-heading-right"><SourceBadge source={sourceLabel} /><span className="tiny-label">NEXT 24 HOURS</span></div>
+              <div className="panel-heading-right"><SourceBadge source={forecastSource} /><span className="tiny-label">NEXT 24 HOURS</span></div>
             </div>
             <div className="chart-area">
               {nextDay.length ? <div className="bar-chart" role="img" aria-label="Hourly forecast carbon intensity bars">
@@ -803,6 +872,28 @@ function App() {
         </section>
         </div>
 
+        <div id="dashboard-panel-mobility" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-mobility" hidden={activeDashboardTab !== 'mobility'}>
+          <section className="content-grid mobility-grid">
+            <article className="panel mobility-panel" aria-labelledby="mobility-heading">
+              <div className="panel-heading"><div><div className="section-kicker">SUSTAINABLE MOBILITY</div><h2 id="mobility-heading">Compare your weekly commute</h2></div><SourceBadge source="ESTIMATED" /></div>
+              <p className="mobility-intro">Estimate commute emissions for one-way distance and days travelled, then compare a travel mode with a solo petrol-car baseline.</p>
+              <form className="mobility-form" onSubmit={(event) => void runMobilityEstimate(event)}>
+                <label>One-way distance <span><input type="number" min="0.1" max="500" step="0.1" required value={mobilityDistance} onChange={(event) => setMobilityDistance(event.target.value)} /> km</span></label>
+                <label>Commute days each week <select value={mobilityDays} onChange={(event) => setMobilityDays(Number(event.target.value))}>{Array.from({ length: 7 }, (_, index) => index + 1).map((days) => <option key={days} value={days}>{days} {days === 1 ? 'day' : 'days'}</option>)}</select></label>
+                <label>Travel mode <select value={mobilityMode} onChange={(event) => setMobilityMode(event.target.value)}><option value="local_bus">Local bus</option><option value="national_rail">National rail</option><option value="motorbike">Motorbike</option><option value="electric_car">Battery electric car</option><option value="petrol_car">Petrol car</option></select></label>
+                <button className="mobility-submit" type="submit" disabled={mobilityLoading}>{mobilityLoading ? 'Calculating…' : 'Calculate weekly impact'}</button>
+              </form>
+              {mobilityError && <p className="mobility-error" role="alert">{mobilityError}</p>}
+              {mobilityEstimate && <div className="mobility-result" aria-live="polite">
+                <div className="mobility-result-highlight"><span>{mobilityEstimate.net_reduction_kgco2e_per_week >= 0 ? 'ESTIMATED REDUCTION' : 'ESTIMATED INCREASE'}</span><strong>{Math.abs(mobilityEstimate.net_reduction_kgco2e_per_week).toFixed(2)} <small>kgCO₂e / week</small></strong><p>Compared with {mobilityEstimate.baseline.mode_name.toLowerCase()} for the same commute.</p></div>
+                <div className="mobility-result-grid"><div><span>SOLO PETROL-CAR BASELINE</span><strong>{mobilityEstimate.baseline.emissions_kgco2e_per_week.toFixed(2)} <small>kgCO₂e / week</small></strong></div><div><span>{mobilityEstimate.selected.mode_name.toUpperCase()}</span><strong>{mobilityEstimate.selected.emissions_kgco2e_per_week.toFixed(2)} <small>kgCO₂e / week</small></strong><small>Factor basis: {mobilityEstimate.selected.factor_basis}</small></div></div>
+                <p className="mobility-methodology">{mobilityEstimate.methodology}</p>
+                <p className="environment-note">Factors: <a href={mobilityEstimate.factor_source_url} target="_blank" rel="noreferrer">{mobilityEstimate.factor_source}</a>. These are indicative estimates, not measured trip emissions.</p>
+              </div>}
+            </article>
+          </section>
+        </div>
+
         <div id="dashboard-panel-reports" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-reports" hidden={activeDashboardTab !== 'reports'}>
         <section className="content-grid report-grid">
           <article className="panel report-panel">
@@ -833,16 +924,16 @@ function App() {
           {mapOpen && <LocationPicker point={mapPoint} onSelect={setMapPoint} />}
           <div className="location-map-footer"><span>{mapPoint.latitude.toFixed(4)}, {mapPoint.longitude.toFixed(4)}</span><a href={`https://zoom.earth/maps/satellite/#view=${mapPoint.latitude.toFixed(4)},${mapPoint.longitude.toFixed(4)},6z`} target="_blank" rel="noreferrer">View this point in Zoom Earth ↗</a></div>
           {locationError && <span className="location-error" role="alert">{locationError}</span>}
-          <button className="map-apply-button" type="button" disabled={locationLoading} onClick={() => void applyMapLocation()}>{locationLoading ? 'Resolving timezone…' : 'Use this location'}</button>
+          <button className="map-apply-button" type="button" disabled={locationLoading} onClick={() => void applyMapLocation()}>{locationLoading ? t('resolving') : t('applyLocation')}</button>
         </div>
       </dialog>
     </main>
   ) : (
     <main className="location-start-shell">
-      <header className="location-start-header"><a className="brand" href="#location-start" aria-label="NRG home"><span className="brand-mark"><PulseIcon /></span><span>NRG</span></a><span>GRID LOCATION SETUP</span></header>
+      <header className="location-start-header"><a className="brand" href="#location-start" aria-label="NRG home"><span className="brand-mark"><PulseIcon /></span><span>NRG</span></a><label className="language-control"><span className="sr-only">{t('language')}</span><select aria-label={t('language')} value={language} onChange={(event) => { if (isLanguageCode(event.target.value)) setLanguage(event.target.value) }}>{Object.entries(languages).map(([code, item]) => <option key={code} value={code}>{item.label}</option>)}</select></label><span>{t('setup')}</span></header>
       <section className="location-start-content" id="location-start">
-        <div className="eyebrow"><span className="eyebrow-line" /> FIRST · SET YOUR LOCATION</div>
-        <h1>Choose where<br /><span>your grid lives.</span></h1>
+        <div className="eyebrow"><span className="eyebrow-line" /> {t('firstLocation')}</div>
+        <h1>{t('chooseWhere')}<br /><span>{t('gridLives')}</span></h1>
         <p className="location-start-copy">Select a point on the map or import its position from Zoom Earth. We’ll resolve the timezone, save your location, and then load the dashboard.</p>
         <div className="location-start-map-card">
           <div className="zoom-earth-import"><label htmlFor="startup-zoom-earth-url">ZOOM EARTH MAP URL</label><div><input id="startup-zoom-earth-url" type="url" value={zoomEarthUrl} onChange={(event) => setZoomEarthUrl(event.target.value)} placeholder="https://zoom.earth/maps/satellite/#view=..." /><button type="button" onClick={importZoomEarthLocation}>Import</button></div>{zoomEarthError && <span role="alert">{zoomEarthError}</span>}</div>
