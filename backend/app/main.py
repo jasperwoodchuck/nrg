@@ -88,9 +88,9 @@ def get_location(session: Session = Depends(get_session)):
 
 
 @app.get("/api/v1/public/grid-snapshot")
-def public_grid_snapshot():
+def public_grid_snapshot(state: str | None = Query(default=None, min_length=2, max_length=80)):
     try:
-        return get_public_grid_data()
+        return get_public_grid_data(state)
     except RuntimeError as error:
         raise HTTPException(502, str(error)) from error
 

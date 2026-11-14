@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.db.models import ForecastRecord, VirtualLoad
 from app.optimizer.service import optimize_pending
+from app.optimizer.scenario import AVERAGE_HOUSEHOLD_DAILY_KWH, run_scenario
 
 
 def test_optimizer_handles_sqlite_naive_datetimes_and_schedules_within_deadline(db_session):
@@ -38,3 +39,17 @@ def test_optimizer_handles_sqlite_naive_datetimes_and_schedules_within_deadline(
     assert chosen <= start + timedelta(hours=2)
     assert chosen + timedelta(hours=load.duration_hours) <= deadline
     assert load.optimized_intensity == 250.0
+
+
+def test_scenario_scales_flexible_load_profile_to_published_household_average():
+    start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    forecasts = [
+        {"timestamp": start + timedelta(hours=hour), "intensity": 300.0 + hour, "source": "ESTIMATED"}
+        for hour in range(48)
+    ]
+
+    result = run_scenario(forecasts, households=3)
+
+    assert result["summary"]["energy_consumed_kwh"] == round(AVERAGE_HOUSEHOLD_DAILY_KWH * 3, 2)
+    assert "1,805 kWh per household-year" in result["methodology"]
+    assert "not household meter data" in result["methodology"]

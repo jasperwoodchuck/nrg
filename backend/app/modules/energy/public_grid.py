@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 PUBLIC_MCP_URL = "https://api.energymap.in/mcp/public"
 CACHE_SECONDS = 300
 _cache_lock = threading.Lock()
-_cache_value: dict[str, Any] | None = None
-_cache_time = 0.0
+_cache_value: dict[str, dict[str, Any]] = {}
+_cache_time: dict[str, float] = {}
 
 
 def _number(value: object) -> bool:
@@ -49,29 +49,54 @@ def _call_tool(client: httpx.Client, tool_name: str, arguments: dict[str, object
     raise ValueError("Public grid service response did not contain a data object")
 
 
-def _fetch_public_grid(client: httpx.Client) -> dict[str, Any]:
+def _fetch_public_grid(client: httpx.Client, state: str | None = None) -> dict[str, Any]:
     snapshot = _call_tool(client, "india_grid_live_snapshot", {"coverage_threshold": 0.5})
-    supply = _call_tool(client, "india_grid_posoco_psp", {})
+    supply_args = {"state": state} if state else {}
+    supply = _call_tool(client, "india_grid_posoco_psp", supply_args)
 
-    nation = snapshot.get("nation")
-    if not isinstance(nation, dict) or nation.get("has_data") is not True or not _number(nation.get("demand_mw")):
-        raise ValueError("Public grid service returned no valid All India demand reading")
-    if not isinstance(nation.get("timestamp"), str) or not isinstance(nation.get("source_type"), str):
+    states = snapshot.get("states")
+    reading = snapshot.get("nation")
+    if state and isinstance(states, list):
+        reading = next(
+            (
+                item
+                for item in states
+                if isinstance(item, dict)
+                and any(
+                    isinstance(item.get(field), str) and item[field].casefold() == state.casefold()
+                    for field in ("state", "name")
+                )
+            ),
+            None,
+        )
+    if not isinstance(reading, dict) or reading.get("has_data") is not True or not _number(reading.get("demand_mw")):
+        raise ValueError(f"Public grid service returned no valid demand reading for {state or 'India'}")
+    if not isinstance(reading.get("timestamp"), str) or not isinstance(reading.get("source_type"), str):
         raise ValueError("Public grid service returned incomplete demand provenance")
 
     items = supply.get("items")
     latest_date = supply.get("latest_date")
     if not isinstance(items, list) or not isinstance(latest_date, str):
         raise ValueError("Public grid service returned an invalid daily supply report")
-    all_india = next(
-        (item for item in items if isinstance(item, dict) and item.get("region") == "All India" and item.get("date") == latest_date),
+    daily_row = next(
+        (
+            item
+            for item in items
+            if isinstance(item, dict)
+            and item.get("date") == latest_date
+            and (
+                isinstance(item.get("name"), str) and item["name"].casefold() == state.casefold()
+                if state
+                else item.get("region") == "All India"
+            )
+        ),
         None,
     )
-    if all_india is None or any(
-        not _number(all_india.get(field))
+    if daily_row is None or any(
+        not _number(daily_row.get(field))
         for field in ("energy_met_mu", "energy_shortage_mu", "peak_demand_met_mw")
     ):
-        raise ValueError("Public grid service returned no complete All India supply report")
+        raise ValueError(f"Public grid service returned no complete daily supply report for {state or 'India'}")
 
     return {
         "provider": "India Energy Atlas",
@@ -79,19 +104,20 @@ def _fetch_public_grid(client: httpx.Client) -> dict[str, Any]:
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "stale": False,
         "snapshot": {
-            "demand_mw": nation["demand_mw"],
-            "timestamp": nation["timestamp"],
-            "source_type": nation["source_type"],
-            "source": nation.get("source"),
-            "basis": nation.get("basis"),
-            "age_minutes": nation.get("age_minutes"),
+            "name": reading.get("name", "India"),
+            "demand_mw": reading["demand_mw"],
+            "timestamp": reading["timestamp"],
+            "source_type": reading["source_type"],
+            "source": reading.get("source"),
+            "basis": reading.get("basis"),
+            "age_minutes": reading.get("age_minutes"),
             "coverage": snapshot.get("coverage"),
         },
         "daily": {
             "date": latest_date,
-            "energy_met_mu": all_india["energy_met_mu"],
-            "energy_shortage_mu": all_india["energy_shortage_mu"],
-            "peak_demand_met_mw": all_india["peak_demand_met_mw"],
+            "energy_met_mu": daily_row["energy_met_mu"],
+            "energy_shortage_mu": daily_row["energy_shortage_mu"],
+            "peak_demand_met_mw": daily_row["peak_demand_met_mw"],
         },
         "sources": {
             "live_demand": "https://npp.gov.in/",
@@ -101,21 +127,22 @@ def _fetch_public_grid(client: httpx.Client) -> dict[str, Any]:
     }
 
 
-def get_public_grid_data() -> dict[str, Any]:
-    global _cache_value, _cache_time
+def get_public_grid_data(state: str | None = None) -> dict[str, Any]:
+    state = state.strip() if state else None
+    cache_key = state.casefold() if state else "india"
     with _cache_lock:
         now = time.monotonic()
-        if _cache_value is not None and now - _cache_time < CACHE_SECONDS:
-            return _cache_value
+        if cache_key in _cache_value and now - _cache_time[cache_key] < CACHE_SECONDS:
+            return _cache_value[cache_key]
 
         try:
             with httpx.Client(timeout=httpx.Timeout(8.0, connect=3.0)) as client:
-                result = _fetch_public_grid(client)
-            _cache_value = result
-            _cache_time = time.monotonic()
+                result = _fetch_public_grid(client, state)
+            _cache_value[cache_key] = result
+            _cache_time[cache_key] = time.monotonic()
             return result
         except (httpx.HTTPError, ValueError, RuntimeError, json.JSONDecodeError) as error:
-            if _cache_value is not None:
+            if cache_key in _cache_value:
                 logger.warning("Public grid refresh failed; serving the last validated response: %s", error)
-                return {**_cache_value, "stale": True}
+                return {**_cache_value[cache_key], "stale": True}
             raise RuntimeError(f"Public grid data is unavailable: {error}") from error

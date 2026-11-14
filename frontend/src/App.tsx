@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import Crosshair from './component/Crosshair.jsx'
 import LocationPicker, { type LocationPoint } from './component/LocationPicker'
 import Topography from './component/Topography.jsx'
-import { languages, translate, type LanguageCode } from './i18n'
+import { languages, translate, translateText, type LanguageCode } from './i18n'
 import './App.css'
 
 type EndpointStatus = 'loading' | 'online' | 'error'
@@ -101,6 +101,7 @@ type EndpointKey = (typeof endpoints)[number]['key']
 type DashboardState = Record<EndpointKey, ViewState>
 
 const initialState = Object.fromEntries(endpoints.map(({ key }) => [key, { payload: null, status: 'loading' }])) as DashboardState
+const loadProfileEndTime = Date.now()
 const dashboardTabs = [
   ['overview', 'Overview'],
   ['power', 'Power'],
@@ -267,10 +268,10 @@ function isLanguageCode(value: string | null): value is LanguageCode {
   return value !== null && Object.hasOwn(languages, value)
 }
 
-function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' }): string {
+function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' }, locale?: string): string {
   if (typeof value !== 'string') return '—'
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '—' : new Intl.DateTimeFormat(undefined, options).format(date)
+  return Number.isNaN(date.getTime()) ? '—' : new Intl.DateTimeFormat(locale, options).format(date)
 }
 
 function App() {
@@ -279,6 +280,8 @@ function App() {
     return isLanguageCode(saved) ? saved : 'en'
   })
   const t = (key: Parameters<typeof translate>[1]) => translate(language, key)
+  const tx = (text: string) => translateText(language, text)
+  const formatDate = (value: unknown, options?: Intl.DateTimeFormatOptions) => formatTime(value, options, languages[language].locale)
   const [showDashboard, setShowDashboard] = useState(false)
   const [activeDashboardTab, setActiveDashboardTab] = useState<'overview' | 'power' | 'weather' | 'environment' | 'mobility' | 'reports'>('overview')
   const [mobilityDistance, setMobilityDistance] = useState('8')
@@ -298,6 +301,7 @@ function App() {
   const [selectedReport, setSelectedReport] = useState<Record<string, unknown> | null>(null)
   const reportDialogRef = useRef<HTMLDialogElement>(null)
   const [weatherMode, setWeatherMode] = useState<'realtime' | 'hourly' | 'daily'>('hourly')
+  const [hoveredLoadPoint, setHoveredLoadPoint] = useState<{ index: number; x: number; y: number; below: boolean } | null>(null)
   const [weatherView, setWeatherView] = useState<ViewState>({ payload: null, status: 'loading' })
   const [airQualityView, setAirQualityView] = useState<ViewState>({ payload: null, status: 'loading' })
   const [waterQualityView, setWaterQualityView] = useState<ViewState>({ payload: null, status: 'loading' })
@@ -355,11 +359,14 @@ function App() {
     if (!mapOpen && dialog.open) dialog.close()
   }, [mapOpen])
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (locationId = selectedLocationId) => {
     setRefreshing(true)
+    const selectedName = locations.find((location) => location.id === locationId)?.name
+    const gridState = locationId === 'custom' ? undefined : selectedName?.split(',').at(-1)?.trim()
     const results = await Promise.all(endpoints.map(async ({ key, path }) => {
       try {
-        return [key, { payload: await getJson(path), status: 'online' as const }] as const
+        const endpoint = key === 'publicGrid' && gridState ? `${path}?state=${encodeURIComponent(gridState)}` : path
+        return [key, { payload: await getJson(endpoint), status: 'online' as const }] as const
       } catch (error) {
         return [key, { payload: null, status: 'error' as const, error: error instanceof Error ? error.message : 'Request failed' }] as const
       }
@@ -372,7 +379,7 @@ function App() {
     }
     setLastUpdated(new Date())
     setRefreshing(false)
-  }, [weatherMode])
+  }, [selectedLocationId, weatherMode])
 
   const runOptimizationScenario = async () => {
     setScenarioLoading(true)
@@ -500,7 +507,7 @@ function App() {
       setScenarioResult(null)
       if (isRecord(response) && isRecord(response.location) && typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
       if (isRecord(response) && typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
-      await refresh()
+      await refresh(location.id)
     } catch (error) {
       setLocationError(error instanceof Error ? error.message : 'Could not update the location')
     } finally {
@@ -521,7 +528,7 @@ function App() {
       if (openDashboard) setShowDashboard(true)
       else {
         setMapOpen(false)
-        await refresh()
+        await refresh('custom')
       }
     } catch (error) {
       setLocationError(error instanceof Error ? error.message : 'Could not update the location')
@@ -555,6 +562,30 @@ function App() {
   const loadSeries = sampleLoadProfile(weatherMode)
   const loadSeriesWindow = weatherMode === 'daily' ? '7 days' : '48 hours'
   const loadSeriesStep = weatherMode === 'realtime' ? '15-minute' : weatherMode === 'hourly' ? 'hourly' : 'daily'
+  const loadTooltipTime = (index: number) => {
+    if (weatherMode === 'daily') {
+      const date = new Date(loadProfileEndTime - (loadSeries.length - 1 - index) * 24 * 60 * 60 * 1000)
+      return new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(date)
+    }
+    const intervalHours = weatherMode === 'realtime' ? 0.25 : 1
+    const date = new Date(loadProfileEndTime - (loadSeries.length - 1 - index) * intervalHours * 60 * 60 * 1000)
+    return new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric' }).format(date)
+  }
+  const handleLoadPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const svgBounds = event.currentTarget.getBoundingClientRect()
+    const chartBounds = event.currentTarget.closest('.load-series-chart')?.getBoundingClientRect()
+    if (!svgBounds.width || !svgBounds.height || !chartBounds) return
+    const ratio = Math.max(0, Math.min(1, (event.clientX - svgBounds.left) / svgBounds.width))
+    const index = Math.round(ratio * (loadSeries.length - 1))
+    const point = loadSeries[index]
+    const pointY = svgBounds.top - chartBounds.top + (180 - (point.actual / 120) * 180) * (svgBounds.height / 180)
+    setHoveredLoadPoint({
+      index,
+      x: Math.max(140, Math.min(chartBounds.width - 140, svgBounds.left - chartBounds.left + ratio * svgBounds.width)),
+      y: pointY < 90 ? pointY + 8 : pointY - 8,
+      below: pointY < 90,
+    })
+  }
   const airQualityPayload = isRecord(airQualityView.payload) ? airQualityView.payload : null
   const airCurrent = airQualityPayload && isRecord(airQualityPayload.current) ? airQualityPayload.current : null
   const airUnits = airQualityPayload && isRecord(airQualityPayload.current_units) ? airQualityPayload.current_units : null
@@ -625,7 +656,7 @@ function App() {
         />
       </div>
       <header className="topbar">
-        <a className="brand" href="#top" aria-label="NRG home">
+        <a className="brand" href="#top" aria-label={tx('NRG home')}>
           <span className="brand-mark"><PulseIcon /></span>
           <span>NRG</span>
         </a>
@@ -633,7 +664,7 @@ function App() {
           <label className="language-control"><span className="sr-only">{t('language')}</span><select aria-label={t('language')} value={language} onChange={(event) => { if (isLanguageCode(event.target.value)) setLanguage(event.target.value) }}>{Object.entries(languages).map(([code, item]) => <option key={code} value={code}>{item.label}</option>)}</select></label>
             <div className={`connection ${allConnected ? 'connection-good' : connected ? 'connection-partial' : 'connection-off'}`}>
             <span className="connection-dot" />
-            {connected}/{endpoints.length} endpoints connected
+            {connected}/{endpoints.length} {tx('endpoints connected')}
           </div>
           <button className="refresh-button" type="button" onClick={() => void refresh()} disabled={refreshing}>
             <RefreshIcon /> {refreshing ? t('refreshing') : t('refresh')}
@@ -645,24 +676,24 @@ function App() {
       <div className="page-content" id="top">
         <section className="hero-row">
           <div>
-            <div className="eyebrow"><span className="eyebrow-line" /> AUTONOMOUS GRID OPTIMIZATION</div>
-            <h1>Carbon, on a<br /><span>cleaner clock.</span></h1>
-            <p className="hero-copy">Flexible demand, shifted into cleaner hours.<br className="desktop-break" /> A live view of your simulated grid fleet.</p>
+            <div className="eyebrow"><span className="eyebrow-line" /> {tx('AUTONOMOUS GRID OPTIMIZATION')}</div>
+            <h1>{tx('Carbon, on a')}<br /><span>{tx('cleaner clock.')}</span></h1>
+            <p className="hero-copy">{tx('Flexible demand, shifted into cleaner hours.')}<br className="desktop-break" /> {tx('A live view of your simulated grid fleet.')}</p>
           </div>
           <div className="hero-side">
             <div className="hero-status-row">
               <div className="live-pill"><span className="live-pulse" /> SYSTEM {healthPayload && healthPayload.status === 'ok' ? t('active') : t('connecting')}</div>
-              <button className="theme-toggle" type="button" aria-pressed={isDarkMode} aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => setIsDarkMode((current) => !current)}>
+              <button className="theme-toggle" type="button" aria-pressed={isDarkMode} aria-label={isDarkMode ? tx('Switch to light mode') : tx('Switch to dark mode')} onClick={() => setIsDarkMode((current) => !current)}>
                 <ThemeIcon dark={isDarkMode} /> <span>{isDarkMode ? t('light') : t('dark')}</span>
               </button>
             </div>
             <label className="location-control">
               <span className="location-label"><LocationIcon /> {t('gridLocation')}</span>
-              <select aria-label="Dashboard location" value={selectedLocationId} disabled={locationLoading} onChange={(event) => void changeLocation(event.target.value)}>
-                {selectedLocationId === 'custom' && <option value="custom" disabled>Current custom location</option>}
+              <select aria-label={tx('Dashboard location')} value={selectedLocationId} disabled={locationLoading} onChange={(event) => void changeLocation(event.target.value)}>
+                {selectedLocationId === 'custom' && <option value="custom" disabled>{tx('Current custom location')}</option>}
                 {locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
               </select>
-              <span className="location-timezone">Timezone: {locationTimezone} <SourceBadge source={timezoneSource} /></span>
+              <span className="location-timezone">{tx('Timezone:')} {locationTimezone} <SourceBadge source={timezoneSource} /></span>
               <button className="map-open-button" type="button" disabled={locationLoading} onClick={() => { setMapPoint(locationPoint); setMapOpen(true) }}>{t('chooseMap')}</button>
               {locationError && <span className="location-error" role="alert">{locationError}</span>}
             </label>
@@ -684,27 +715,27 @@ function App() {
         </nav>
 
         <div id="dashboard-panel-overview" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-overview" hidden={activeDashboardTab !== 'overview'}>
-        <section className="metric-grid" aria-label="Public India power grid data">
+        <section className="metric-grid" aria-label={tx('Regional public power grid data')}>
           {publicGridPayload ? <>
-            <MetricCard label="ALL INDIA DEMAND" value={formatGridValue(publicGridSnapshot?.demand_mw, 0)} unit="MW" note={demandNote} tone="green" icon={<BoltIcon />} badge={demandSource} />
-            <MetricCard label="ENERGY MET · DAILY" value={formatGridValue(publicGridDaily?.energy_met_mu)} unit="MU" note={`Grid-India report · ${asText(publicGridDaily?.date)}`} tone="cream" icon={<GridIcon />} badge="GRID-INDIA" />
-            <MetricCard label="PEAK DEMAND MET" value={formatGridValue(publicGridDaily?.peak_demand_met_mw, 0)} unit="MW" note={`Official daily report · ${asText(publicGridDaily?.date)}`} tone="lavender" icon={<SunIcon />} badge="GRID-INDIA" />
-            <MetricCard label="ENERGY SHORTAGE" value={formatGridValue(publicGridDaily?.energy_shortage_mu)} unit="MU" note={`Reported daily shortage · ${asText(publicGridDaily?.date)}`} tone="blue" icon={<DropIcon />} badge="GRID-INDIA" />
-          </> : <EmptyState state={data.publicGrid} label="Public grid data" />}
+            <MetricCard label={`${asText(publicGridSnapshot?.name, 'India').toUpperCase()} DEMAND`} value={formatGridValue(publicGridSnapshot?.demand_mw, 0)} unit="MW" note={demandNote} tone="green" icon={<BoltIcon />} badge={demandSource} />
+            <MetricCard label={tx('ENERGY MET · DAILY')} value={formatGridValue(publicGridDaily?.energy_met_mu)} unit="MU" note={`${tx('Grid-India report')} · ${asText(publicGridDaily?.date)}`} tone="cream" icon={<GridIcon />} badge="GRID-INDIA" />
+            <MetricCard label={tx('PEAK DEMAND MET')} value={formatGridValue(publicGridDaily?.peak_demand_met_mw, 0)} unit="MW" note={`${tx('Official daily report')} · ${asText(publicGridDaily?.date)}`} tone="lavender" icon={<SunIcon />} badge="GRID-INDIA" />
+            <MetricCard label={tx('ENERGY SHORTAGE')} value={formatGridValue(publicGridDaily?.energy_shortage_mu)} unit="MU" note={`${tx('Reported daily shortage')} · ${asText(publicGridDaily?.date)}`} tone="blue" icon={<DropIcon />} badge="GRID-INDIA" />
+          </> : <EmptyState language={language} state={data.publicGrid} label={tx('Public grid data')} />}
         </section>
-        {publicGridPayload && <p className="public-grid-attribution">Demand: <a href="https://npp.gov.in/" target="_blank" rel="noreferrer">National Power Portal · MERIT</a> · Daily supply: <a href="https://grid-india.in/" target="_blank" rel="noreferrer">Grid-India</a> · data via <a href="https://www.energymap.in/developer/mcp/public" target="_blank" rel="noreferrer">India Energy Atlas</a>{publicGridPayload.stale === true ? ' · showing cached data' : ''}</p>}
+        {publicGridPayload && <p className="public-grid-attribution">{tx('Demand:')} <a href="https://npp.gov.in/" target="_blank" rel="noreferrer">National Power Portal · MERIT</a> · {tx('Daily supply:')} <a href="https://grid-india.in/" target="_blank" rel="noreferrer">Grid-India</a> · {tx('data via')} <a href="https://www.energymap.in/developer/mcp/public" target="_blank" rel="noreferrer">India Energy Atlas</a>{selectedLocationId === 'custom' ? ' · state not resolved for this map point; showing All India data' : ''}{publicGridPayload.stale === true ? ` · ${tx('showing cached data')}` : ''}</p>}
 
         <section className="panel scenario-panel" aria-labelledby="scenario-heading">
           <div className="scenario-intro">
             <div>
-              <div className="section-kicker">GRID OPTIMIZATION SIMULATOR</div>
-              <h2 id="scenario-heading">Turn the forecast into a plan</h2>
-              <p>Compare typical appliance timing with lower-carbon windows for a virtual household fleet in {selectedLocationId === 'custom' ? 'your selected location' : locations.find((item) => item.id === selectedLocationId)?.name ?? 'your selected location'}.</p>
+              <div className="section-kicker">{tx('GRID OPTIMIZATION SIMULATOR')}</div>
+              <h2 id="scenario-heading">{tx('Turn the forecast into a plan')}</h2>
+              <p>{tx('Estimate flexible appliance scheduling against lower-carbon hours in')} {selectedLocationId === 'custom' ? tx('your selected location') : locations.find((item) => item.id === selectedLocationId)?.name ?? tx('your selected location')}, {tx('using')} <a href="https://beeindia.gov.in/WriteReadData/L45218/2878513814676762.pdf" target="_blank" rel="noreferrer">{tx('BEE average Indian household electricity use')}</a>.</p>
             </div>
             <div className="scenario-controls">
               <label htmlFor="scenario-households">{t('virtualHomes')}</label>
               <select id="scenario-households" value={scenarioHouseholds} disabled={scenarioLoading} onChange={(event) => setScenarioHouseholds(Number(event.target.value))}>
-                {[10, 30, 60, 100].map((count) => <option key={count} value={count}>{count} homes</option>)}
+                {[10, 30, 60, 100].map((count) => <option key={count} value={count}>{count} {tx('homes')}</option>)}
               </select>
               <button className="scenario-run-button" type="button" onClick={() => void runOptimizationScenario()} disabled={scenarioLoading || locationLoading}>
                 {scenarioLoading ? t('optimizing') : scenarioResult ? t('runAgain') : t('runOptimization')}
@@ -714,17 +745,17 @@ function App() {
           {scenarioError && <div className="scenario-error" role="alert">{scenarioError}</div>}
           {scenarioResult && <div className="scenario-result" aria-live="polite">
             <div className="scenario-summary">
-              <div className="scenario-impact"><span>ESTIMATED CO₂ AVOIDED</span><strong>{formatCo2Grams(scenarioResult.summary.co2_avoided_g)}</strong><small>Typical timing → optimized timing</small></div>
-              <div><span>LOADS OPTIMIZED</span><strong>{scenarioResult.summary.loads_optimized} <small>/ {scenarioResult.summary.total_loads}</small></strong></div>
-              <div><span>ENERGY SHIFTED</span><strong>{scenarioResult.summary.energy_shifted_kwh.toFixed(1)} <small>kWh</small></strong></div>
-              <div><span>ENERGY CONSUMED</span><strong>{scenarioResult.summary.energy_consumed_kwh.toFixed(1)} <small>kWh</small></strong><small>Unchanged by scheduling</small></div>
+              <div className="scenario-impact"><span>{tx('ESTIMATED CO₂ AVOIDED')}</span><strong>{formatCo2Grams(scenarioResult.summary.co2_avoided_g)}</strong><small>{tx('Typical timing → optimized timing')}</small></div>
+              <div><span>{tx('LOADS OPTIMIZED')}</span><strong>{scenarioResult.summary.loads_optimized} <small>/ {scenarioResult.summary.total_loads}</small></strong></div>
+              <div><span>{tx('ENERGY SHIFTED')}</span><strong>{scenarioResult.summary.energy_shifted_kwh.toFixed(1)} <small>kWh</small></strong></div>
+              <div><span>{tx('ENERGY CONSUMED')}</span><strong>{scenarioResult.summary.energy_consumed_kwh.toFixed(1)} <small>kWh</small></strong><small>{tx('Unchanged by scheduling')}</small></div>
             </div>
-            <div className="scenario-emissions"><span>Baseline emissions <strong>{formatCo2Grams(scenarioResult.summary.baseline_co2_g)}</strong></span><span>Optimized emissions <strong>{formatCo2Grams(scenarioResult.summary.optimized_co2_g)}</strong></span><SourceBadge source={scenarioResult.source} /><SourceBadge source={scenarioResult.forecast_source} /></div>
-            <div className="scenario-decisions-heading"><strong>Sample schedule changes</strong><span>{scenarioResult.summary.households} virtual homes · grid cap {scenarioResult.summary.max_concurrent_loads} simultaneous · {scenarioResult.summary.loads_limited_by_capacity} limited by capacity · peak {scenarioResult.summary.peak_concurrent_loads}</span></div>
-            <div className="table-wrap scenario-table-wrap"><table className="scenario-table"><thead><tr><th>VIRTUAL LOAD</th><th>BASELINE TIME</th><th>OPTIMIZED TIME</th><th>CO₂ AVOIDED</th></tr></thead><tbody>
-              {scenarioResult.decisions.slice(0, 8).map((item, index) => <tr key={`${item.household}-${item.load}-${index}`}><td><span className="device-name">{formatKind(item.load)}</span><span className="scenario-house">Home {item.household}</span></td><td>{formatTime(item.baseline_time)}</td><td>{item.chosen_start ? formatTime(item.chosen_start) : 'No feasible window'}</td><td className="saving-cell">{formatCo2Grams(item.saving_g)}</td></tr>)}
+            <div className="scenario-emissions"><span>{tx('Baseline emissions')} <strong>{formatCo2Grams(scenarioResult.summary.baseline_co2_g)}</strong></span><span>{tx('Optimized emissions')} <strong>{formatCo2Grams(scenarioResult.summary.optimized_co2_g)}</strong></span><SourceBadge source={scenarioResult.source} /><SourceBadge source={scenarioResult.forecast_source} /></div>
+            <div className="scenario-decisions-heading"><strong>{tx('Sample schedule changes')}</strong><span>{scenarioResult.summary.households} {tx('estimated homes')} · {tx('grid cap')} {scenarioResult.summary.max_concurrent_loads} {tx('simultaneous')} · {scenarioResult.summary.loads_limited_by_capacity} {tx('limited by capacity')} · {tx('peak')} {scenarioResult.summary.peak_concurrent_loads}</span></div>
+            <div className="table-wrap scenario-table-wrap"><table className="scenario-table"><thead><tr><th>{tx('ESTIMATED LOAD')}</th><th>{tx('BASELINE TIME')}</th><th>{tx('OPTIMIZED TIME')}</th><th>{tx('CO₂ AVOIDED')}</th></tr></thead><tbody>
+              {scenarioResult.decisions.slice(0, 8).map((item, index) => <tr key={`${item.household}-${item.load}-${index}`}><td><span className="device-name">{tx(formatKind(item.load))}</span><span className="scenario-house">{tx('Home')} {item.household}</span></td><td>{formatDate(item.baseline_time)}</td><td>{item.chosen_start ? formatDate(item.chosen_start) : tx('No feasible window')}</td><td className="saving-cell">{formatCo2Grams(item.saving_g)}</td></tr>)}
             </tbody></table></div>
-            <p className="scenario-methodology">{scenarioResult.methodology} Forecast source: {scenarioResult.forecast_source}. Simulation only; no physical devices are controlled.</p>
+            <p className="scenario-methodology">{scenarioResult.methodology} {tx('Forecast source:')} {scenarioResult.forecast_source}. {tx('Simulation only; no physical devices are controlled.')}</p>
           </div>}
         </section>
         </div>
@@ -733,8 +764,8 @@ function App() {
         <section className="content-grid">
           <article className="panel forecast-panel">
               <div className="panel-heading">
-              <div><div className="section-kicker">GRID CARBON FORECAST</div><h2>Cleaner hours ahead</h2></div>
-              <div className="panel-heading-right"><SourceBadge source={forecastSource} /><span className="tiny-label">NEXT 24 HOURS</span></div>
+              <div><div className="section-kicker">{tx('GRID CARBON FORECAST')}</div><h2>{tx('Cleaner hours ahead')}</h2></div>
+              <div className="panel-heading-right"><SourceBadge source={forecastSource} /><span className="tiny-label">{tx('NEXT 24 HOURS')}</span></div>
             </div>
             <div className="chart-area">
               {nextDay.length ? <div className="bar-chart" role="img" aria-label="Hourly forecast carbon intensity bars">
@@ -742,29 +773,29 @@ function App() {
                   const intensity = asNumber(row.intensity_gco2_kwh)
                   const height = Math.max(8, (intensity / maxIntensity) * 100)
                   const low = row.low_carbon_window === true
-                  return <div className="bar-column" key={`${String(row.timestamp)}-${index}`} title={`${formatTime(row.timestamp)} · ${Math.round(intensity)} gCO₂/kWh`}>
+                  return <div className="bar-column" key={`${String(row.timestamp)}-${index}`} title={`${formatDate(row.timestamp)} · ${Math.round(intensity)} gCO₂/kWh`}>
                     <div className={`bar ${low ? 'bar-low' : ''}`} style={{ height: `${height}%` }} />
-                    {index % 3 === 0 && <span className="bar-label">{formatTime(row.timestamp, { hour: 'numeric' })}</span>}
+                    {index % 3 === 0 && <span className="bar-label">{formatDate(row.timestamp, { hour: 'numeric' })}</span>}
                   </div>
                 })}
-              </div> : <EmptyState state={data.forecast} label="Forecast data" />}
-              <div className="chart-legend"><span><i className="legend-dot legend-standard" /> Grid intensity</span><span><i className="legend-dot legend-low" /> Cleaner window</span><span className="chart-unit">gCO₂ / kWh</span></div>
+              </div> : <EmptyState language={language} state={data.forecast} label={tx('Forecast data')} />}
+              <div className="chart-legend"><span><i className="legend-dot legend-standard" /> {tx('Grid intensity')}</span><span><i className="legend-dot legend-low" /> {tx('Cleaner window')}</span><span className="chart-unit">{tx('gCO₂ / kWh')}</span></div>
             </div>
             <div className="forecast-stats">
-              <div><span className="stat-label">CLEANEST HOUR</span><strong>{nextDay.length ? `${Math.round(Math.min(...nextDay.map((row) => asNumber(row.intensity_gco2_kwh))))} <small>gCO₂/kWh</small>` : '—'}</strong></div>
-              <div><span className="stat-label">FORECAST SOURCE</span><strong>{asText(isRecord(forecastPayload) ? forecastPayload.source : null, '—')}</strong></div>
-              <div><span className="stat-label">HORIZON</span><strong>{forecastRows.length || '—'} <small>hours</small></strong></div>
+              <div><span className="stat-label">{tx('CLEANEST HOUR')}</span><strong>{nextDay.length ? `${Math.round(Math.min(...nextDay.map((row) => asNumber(row.intensity_gco2_kwh))))} <small>gCO₂/kWh</small>` : '—'}</strong></div>
+              <div><span className="stat-label">{tx('FORECAST SOURCE')}</span><strong>{asText(isRecord(forecastPayload) ? forecastPayload.source : null, '—')}</strong></div>
+              <div><span className="stat-label">{tx('HORIZON')}</span><strong>{forecastRows.length || '—'} <small>{tx('hours')}</small></strong></div>
             </div>
           </article>
 
           <article className="panel insights-panel">
-              <div className="panel-heading"><div><div className="section-kicker">PULSE CHECK</div><h2>Grid insights</h2></div><span className="sparkle">✳</span></div>
+              <div className="panel-heading"><div><div className="section-kicker">{tx('PULSE CHECK')}</div><h2>{tx('Grid insights')}</h2></div><span className="sparkle">✳</span></div>
             {insightRows.length ? <div className="insight-list">
-              {insightRows.map((item, index) => <InsightItem key={`${String(item.type)}-${index}`} item={item} />)}
-            </div> : <EmptyState state={data.insights} label="Insights" />}
+              {insightRows.map((item, index) => <InsightItem key={`${String(item.type)}-${index}`} item={item} language={language} />)}
+            </div> : <EmptyState language={language} state={data.insights} label={tx('Insights')} />}
             <div className="health-strip">
               <span className="health-icon"><PulseIcon /></span>
-              <div><strong>Pipeline health</strong><span>{healthPayload?.scheduler === 'running' ? 'Scheduler running' : asText(healthPayload?.status, 'Waiting for API')}</span></div>
+              <div><strong>{tx('Pipeline health')}</strong><span>{healthPayload?.scheduler === 'running' ? 'Scheduler running' : asText(healthPayload?.status, 'Waiting for API')}</span></div>
               <span className={`health-state ${healthPayload?.status === 'ok' ? 'state-ok' : 'state-wait'}`}>{healthPayload?.status === 'ok' ? 'HEALTHY' : 'CHECKING'}</span>
             </div>
           </article>
@@ -772,22 +803,22 @@ function App() {
 
         <section className="content-grid lower-grid">
           <article className="panel schedule-panel">
-              <div className="panel-heading"><div><div className="section-kicker">AUTOMATED LOAD SHIFTING</div><h2>Schedule decisions</h2></div><span className="count-chip">{scheduleRows.length} decisions</span></div>
-            {scheduleRows.length ? <div className="table-wrap"><table><thead><tr><th>VIRTUAL LOAD</th><th>BASELINE TIME</th><th>CHOSEN WINDOW</th><th>CARBON SAVED</th></tr></thead><tbody>
+              <div className="panel-heading"><div><div className="section-kicker">{tx('AUTOMATED LOAD SHIFTING')}</div><h2>{tx('Schedule decisions')}</h2></div><span className="count-chip">{scheduleRows.length} decisions</span></div>
+            {scheduleRows.length ? <div className="table-wrap"><table><thead><tr><th>{tx('VIRTUAL LOAD')}</th><th>{tx('BASELINE TIME')}</th><th>{tx('CHOSEN WINDOW')}</th><th>{tx('CARBON SAVED')}</th></tr></thead><tbody>
               {scheduleRows.slice(0, 6).map((item, index) => {
                 const window = isRecord(item.chosen_window) ? item.chosen_window : null
-                return <tr key={`${String(item.load_id)}-${index}`}><td><span className="device-icon"><DeviceIcon kind={asText(item.load)} /></span><span className="device-name">{formatKind(item.load)}</span><span className="status-dot" title={asText(item.status)} /></td><td>{formatTime(item.baseline_time)}</td><td><strong>{formatTime(window?.start)}</strong><span className="duration"> · {asNumber(window?.duration_hours)}h</span></td><td className="saving-cell">{asNumber(item.saving_g).toFixed(0)} g</td></tr>
+                return <tr key={`${String(item.load_id)}-${index}`}><td><span className="device-icon"><DeviceIcon kind={asText(item.load)} /></span><span className="device-name">{tx(formatKind(item.load))}</span><span className="status-dot" title={asText(item.status)} /></td><td>{formatDate(item.baseline_time)}</td><td><strong>{formatDate(window?.start)}</strong><span className="duration"> · {asNumber(window?.duration_hours)}h</span></td><td className="saving-cell">{asNumber(item.saving_g).toFixed(0)} g</td></tr>
               })}
-            </tbody></table></div> : <EmptyState state={data.schedule} label="Schedule decisions" />}
-            <div className="panel-footnote"><span>↗</span> Energy use stays constant. Only the timing changes.</div>
+            </tbody></table></div> : <EmptyState language={language} state={data.schedule} label={tx('Schedule decisions')} />}
+            <div className="panel-footnote"><span>↗</span> {tx('Energy use stays constant. Only the timing changes.')}</div>
           </article>
 
           <article className="panel fleet-panel">
-              <div className="panel-heading"><div><div className="section-kicker">SIMULATED HOUSEHOLDS</div><h2>Flexible fleet</h2></div><span className="count-chip">{loadRows.length} devices</span></div>
+              <div className="panel-heading"><div><div className="section-kicker">{tx('SIMULATED HOUSEHOLDS')}</div><h2>{tx('Flexible fleet')}</h2></div><span className="count-chip">{loadRows.length} {tx('devices')}</span></div>
             {loadRows.length ? <div className="fleet-list">{loadRows.slice(0, 7).map((item, index) => <div className="fleet-row" key={`${String(item.id)}-${index}`}>
-              <span className="device-icon fleet-device"><DeviceIcon kind={asText(item.kind)} /></span><div className="fleet-main"><strong>{formatKind(item.kind)}</strong><span>Home {asNumber(item.household)}</span></div><div className="fleet-meta"><strong>{asNumber(item.energy_kwh).toFixed(1)} <small>kWh</small></strong><span className={`tag tag-${asText(item.status, 'pending').toLowerCase()}`}>{asText(item.status, 'pending')}</span></div>
-            </div>)}</div> : <EmptyState state={data.loads} label="Virtual fleet" />}
-            <div className="fleet-foot"><span className="fleet-dot" /> All devices are virtual · no hardware connected</div>
+              <span className="device-icon fleet-device"><DeviceIcon kind={asText(item.kind)} /></span><div className="fleet-main"><strong>{tx(formatKind(item.kind))}</strong><span>{tx('Home')} {asNumber(item.household)}</span></div><div className="fleet-meta"><strong>{asNumber(item.energy_kwh).toFixed(1)} <small>kWh</small></strong><span className={`tag tag-${asText(item.status, 'pending').toLowerCase()}`}>{asText(item.status, 'pending')}</span></div>
+            </div>)}</div> : <EmptyState language={language} state={data.loads} label={tx('Virtual fleet')} />}
+            <div className="fleet-foot"><span className="fleet-dot" /> {tx('All devices are virtual · no hardware connected')}</div>
           </article>
         </section>
         </div>
@@ -795,79 +826,81 @@ function App() {
         <div id="dashboard-panel-weather" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-weather" hidden={activeDashboardTab !== 'weather'}>
         <section className="weather-panel panel" aria-labelledby="weather-heading">
           <div className="panel-heading">
-            <div><div className="section-kicker">OPEN-METEO WEATHER</div><h2 id="weather-heading">Conditions by time scale</h2></div>
+            <div><div className="section-kicker">{tx('OPEN-METEO WEATHER')}</div><h2 id="weather-heading">{tx('Conditions by time scale')}</h2></div>
             <div className="panel-heading-right"><SourceBadge source={asText(weatherPayload?.source, 'ESTIMATED')} /><span className="tiny-label">{asText(weatherPayload?.resolution, weatherMode)}</span></div>
           </div>
-          <div className="weather-controls" role="tablist" aria-label="Weather data resolution">
-            {(['realtime', 'hourly', 'daily'] as const).map((mode) => <button key={mode} type="button" role="tab" aria-selected={weatherMode === mode} className={weatherMode === mode ? 'weather-tab weather-tab-active' : 'weather-tab'} onClick={() => setWeatherMode(mode)}>{mode === 'realtime' ? '15-minute' : mode}</button>)}
+          <div className="weather-controls" role="tablist" aria-label={tx('Weather data resolution')}>
+            {(['realtime', 'hourly', 'daily'] as const).map((mode) => <button key={mode} type="button" role="tab" aria-selected={weatherMode === mode} className={weatherMode === mode ? 'weather-tab weather-tab-active' : 'weather-tab'} onClick={() => setWeatherMode(mode)}>{mode === 'realtime' ? tx('15-minute') : tx(mode)}</button>)}
           </div>
           {typeof weatherPayload?.note === 'string' && <p className="weather-note">{asText(weatherPayload.note)}</p>}
           {weatherRows.length ? <div className="weather-table-wrap"><table className="weather-table"><thead><tr><th>TIME ({asText(weatherPayload?.timezone, 'local')})</th>{Object.keys(isRecord(weatherRows[0].values) ? weatherRows[0].values : {}).map((key) => <th key={key}>{formatKind(key)}</th>)}</tr></thead><tbody>
             {weatherRows.slice(0, weatherMode === 'daily' ? 7 : weatherMode === 'realtime' ? 16 : 24).map((row, index) => {
               const values = isRecord(row.values) ? row.values : {}
-              return <tr key={`${String(row.timestamp)}-${index}`}><td>{formatTime(row.timestamp, weatherMode === 'daily' ? { month: 'short', day: 'numeric' } : { hour: 'numeric', minute: '2-digit' })}</td>{Object.entries(values).map(([key, value]) => <td key={key}>{typeof value === 'number' ? value.toLocaleString(undefined, { maximumFractionDigits: 1 }) : asText(value == null ? null : String(value))}{typeof weatherPayload?.units === 'object' && weatherPayload.units !== null && key in weatherPayload.units ? ` ${String((weatherPayload.units as Record<string, unknown>)[key])}` : ''}</td>)}</tr>
+              return <tr key={`${String(row.timestamp)}-${index}`}><td>{formatDate(row.timestamp, weatherMode === 'daily' ? { month: 'short', day: 'numeric' } : { hour: 'numeric', minute: '2-digit' })}</td>{Object.entries(values).map(([key, value]) => <td key={key}>{typeof value === 'number' ? value.toLocaleString(languages[language].locale, { maximumFractionDigits: 1 }) : asText(value == null ? null : String(value))}{typeof weatherPayload?.units === 'object' && weatherPayload.units !== null && key in weatherPayload.units ? ` ${String((weatherPayload.units as Record<string, unknown>)[key])}` : ''}</td>)}</tr>
             })}
-          </tbody></table></div> : <EmptyState state={weatherView} label="Open-Meteo weather" />}
-          <div className="weather-meta">{weatherPayload?.fetched_at ? `Fetched ${formatTime(weatherPayload.fetched_at, { hour: 'numeric', minute: '2-digit' })}` : 'Waiting for weather data'} · powered by Open-Meteo</div>
-          <div className="load-series-heading"><div><div className="section-kicker">SIMULATED ENERGY</div><h3>Load against baseline</h3><p>Illustrative household demand · {loadSeriesStep} samples across {loadSeriesWindow}</p></div><SourceBadge source="SIMULATED" /></div>
+          </tbody></table></div> : <EmptyState language={language} state={weatherView} label={tx('Open-Meteo weather')} />}
+          <div className="weather-meta">{weatherPayload?.fetched_at ? `Fetched ${formatDate(weatherPayload.fetched_at, { hour: 'numeric', minute: '2-digit' })}` : tx('Waiting for weather data')} · {tx('Powered by')} Open-Meteo</div>
+          <div className="load-series-heading"><div><div className="section-kicker">{tx('SIMULATED ENERGY')}</div><h3>{tx('Load against baseline')}</h3><p>Illustrative household demand · {tx(loadSeriesStep)} {tx('samples across')} {tx(loadSeriesWindow)}</p></div><SourceBadge source="SIMULATED" /></div>
           <div className="load-series-chart" role="img" aria-label={`Simulated actual household load and baseline with ${loadSeriesStep} samples across ${loadSeriesWindow}, in kilowatts`}>
             <div className="load-series-axis"><span>120</span><span>80</span><span>40</span><span>0</span></div>
-            <svg viewBox="0 0 960 180" preserveAspectRatio="none" aria-hidden="true">
+            <svg viewBox="0 0 960 180" preserveAspectRatio="none" aria-hidden="true" onPointerMove={handleLoadPointerMove} onPointerLeave={() => setHoveredLoadPoint(null)}>
               <defs><linearGradient id="load-area" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#4b9d73" stopOpacity=".28"/><stop offset="100%" stopColor="#4b9d73" stopOpacity=".02"/></linearGradient></defs>
               <path className="load-baseline-line" d={profilePath(loadSeries, 'baseline', 960, 180)} />
               <path className="load-actual-area" d={`${profilePath(loadSeries, 'actual', 960, 180)} L 960 180 L 0 180 Z`} />
               <path className="load-actual-line" d={profilePath(loadSeries, 'actual', 960, 180)} />
+              {hoveredLoadPoint && <><line className="load-hover-guide" x1={(hoveredLoadPoint.index / (loadSeries.length - 1)) * 960} x2={(hoveredLoadPoint.index / (loadSeries.length - 1)) * 960} y1="0" y2="180"/><circle className="load-hover-dot" cx={(hoveredLoadPoint.index / (loadSeries.length - 1)) * 960} cy={180 - (loadSeries[hoveredLoadPoint.index].actual / 120) * 180} r="5"/></>}
             </svg>
+            {hoveredLoadPoint && <div className={`load-series-tooltip${hoveredLoadPoint.below ? ' load-series-tooltip-below' : ''}`} style={{ left: `${hoveredLoadPoint.x}px`, top: `${hoveredLoadPoint.y}px` }}><strong>{loadTooltipTime(hoveredLoadPoint.index)}</strong><span><i className="load-legend-actual"/>Actual kW<b>{loadSeries[hoveredLoadPoint.index].actual.toFixed(2)}</b></span><span><i className="load-legend-baseline"/>Baseline kW<b>{loadSeries[hoveredLoadPoint.index].baseline.toFixed(2)}</b></span></div>}
           </div>
           <div className="load-series-footer"><div className="load-series-legend"><span><i className="load-legend-actual"/>Actual kW</span><span><i className="load-legend-baseline"/>Baseline kW</span></div><div className="load-series-ticks">{(weatherMode === 'daily' ? ['7 days ago', '5 days', '3 days', 'Yesterday', 'Today'] : ['48h ago', '36h', '24h', '12h', 'Now']).map((tick) => <span key={tick}>{tick}</span>)}</div></div>
         </section>
         </div>
 
         <div id="dashboard-panel-environment" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-environment" hidden={activeDashboardTab !== 'environment'}>
-        <section className="environment-grid" aria-label="Environmental monitoring">
+        <section className="environment-grid" aria-label={tx('Environmental monitoring')}>
           <article className="panel environment-panel air-quality-panel">
-            <div className="panel-heading"><div><div className="section-kicker">MODELED AIR QUALITY</div><h2>Air quality outlook</h2></div><button className="monitor-refresh" type="button" onClick={() => void refreshEnvironmentalData()} disabled={environmentRefreshing}>{environmentRefreshing ? 'Updating…' : 'Refresh'}</button></div>
+            <div className="panel-heading"><div><div className="section-kicker">{tx('MODELED AIR QUALITY')}</div><h2>{tx('Air quality outlook')}</h2></div><button className="monitor-refresh" type="button" onClick={() => void refreshEnvironmentalData()} disabled={environmentRefreshing}>{environmentRefreshing ? 'Updating…' : 'Refresh'}</button></div>
             {airQualityPayload && airCurrent ? <>
               <div className="air-current-grid">
                 {[['PM2.5', 'pm2_5'], ['PM10', 'pm10'], ['NO₂', 'nitrogen_dioxide'], ['O₃', 'ozone']].map(([label, key]) => <div key={key}><span>{label}</span><strong>{typeof airCurrent[key] === 'number' ? asNumber(airCurrent[key]).toFixed(1) : '—'}<small> {asText(airUnits?.[key], 'μg/m³')}</small></strong></div>)}
               </div>
-              <div className="environment-subheading"><strong>Next 12 hours</strong><span>Model forecast · not sensor readings</span></div>
-              <div className="table-wrap environment-table-wrap"><table className="environment-table"><thead><tr><th>TIME</th><th>PM2.5</th><th>PM10</th><th>NO₂</th><th>O₃</th></tr></thead><tbody>
-                {airRows.slice(0, 12).map((row, index) => <tr key={`${String(row.timestamp)}-${index}`}><td>{formatTime(row.timestamp)}</td>{['pm2_5', 'pm10', 'nitrogen_dioxide', 'ozone'].map((key) => <td key={key}>{typeof row[key] === 'number' ? asNumber(row[key]).toFixed(1) : '—'}</td>)}</tr>)}
+              <div className="environment-subheading"><strong>{tx('Next 12 hours')}</strong><span>{tx('Model forecast · not sensor readings')}</span></div>
+              <div className="table-wrap environment-table-wrap"><table className="environment-table"><thead><tr><th>{tx('TIME')}</th><th>PM2.5</th><th>PM10</th><th>NO₂</th><th>O₃</th></tr></thead><tbody>
+                {airRows.slice(0, 12).map((row, index) => <tr key={`${String(row.timestamp)}-${index}`}><td>{formatDate(row.timestamp)}</td>{['pm2_5', 'pm10', 'nitrogen_dioxide', 'ozone'].map((key) => <td key={key}>{typeof row[key] === 'number' ? asNumber(row[key]).toFixed(1) : '—'}</td>)}</tr>)}
               </tbody></table></div>
               <p className="environment-note">{asText(airQualityPayload.note)} · <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noreferrer">Open-Meteo / Copernicus CAMS</a></p>
-            </> : <EmptyState state={airQualityView} label="Air-quality forecast" />}
+            </> : <EmptyState language={language} state={airQualityView} label={tx('Air-quality forecast')} />}
           </article>
 
           <article className="panel environment-panel water-quality-panel">
-            <div className="panel-heading"><div><div className="section-kicker">CPCB SURFACE WATER</div><h2>Nearby sampling stations</h2></div><select aria-label="Water quality region" value={waterRegion} onChange={(event) => setWaterRegion(event.target.value)} disabled={!waterRegions.length || environmentRefreshing}>{(waterRegions.length ? waterRegions : ['West Bengal']).map((region) => <option key={region} value={region}>{region}</option>)}</select></div>
-            <p className="water-data-note">Historical manual samples in {asText(waterQualityPayload?.region, waterRegion)} · within {asNumber(waterQualityPayload?.radius_km, 100)} km</p>
+            <div className="panel-heading"><div><div className="section-kicker">CPCB SURFACE WATER</div><h2>{tx('Nearby sampling stations')}</h2></div><select aria-label={tx('Water quality region')} value={waterRegion} onChange={(event) => setWaterRegion(event.target.value)} disabled={!waterRegions.length || environmentRefreshing}>{(waterRegions.length ? waterRegions : ['West Bengal']).map((region) => <option key={region} value={region}>{region}</option>)}</select></div>
+            <p className="water-data-note">{tx('Historical manual samples in')} {asText(waterQualityPayload?.region, waterRegion)} · {tx('within')} {asNumber(waterQualityPayload?.radius_km, 100)} km</p>
             {waterStations.length ? <div className="water-station-list">{waterStations.slice(0, 5).map((station, index) => {
               const parameters = asList(station.parameters).filter(isRecord)
               return <article className="water-station" key={`${String(station.station)}-${index}`}>
-                <div className="water-station-heading"><div><strong>{asText(station.station, 'CPCB station')}</strong><span>{asText(station.waterbody, asText(station.district, 'Surface water'))} · {asNumber(station.distance_km).toFixed(1)} km</span></div><time>{formatTime(station.sampled_at, { year: 'numeric', month: 'short', day: 'numeric' })}</time></div>
-                <div className="water-parameter-list">{parameters.map((parameter) => <span key={String(parameter.name)}>{asText(parameter.name)} <strong>{asNumber(parameter.value).toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong> {asText(parameter.unit)}</span>)}</div>
+                <div className="water-station-heading"><div><strong>{asText(station.station, 'CPCB station')}</strong><span>{asText(station.waterbody, asText(station.district, 'Surface water'))} · {asNumber(station.distance_km).toFixed(1)} km</span></div><time>{formatDate(station.sampled_at, { year: 'numeric', month: 'short', day: 'numeric' })}</time></div>
+                <div className="water-parameter-list">{parameters.map((parameter) => <span key={String(parameter.name)}>{asText(parameter.name)} <strong>{asNumber(parameter.value).toLocaleString(languages[language].locale, { maximumFractionDigits: 2 })}</strong> {asText(parameter.unit)}</span>)}</div>
               </article>
-            })}</div> : waterQualityPayload ? <div className="water-empty-note">{asText(waterQualityPayload.note, 'No nearby water samples are available.')}</div> : <EmptyState state={waterQualityView} label="CPCB water-quality data" />}
+            })}</div> : waterQualityPayload ? <div className="water-empty-note">{asText(waterQualityPayload.note, 'No nearby water samples are available.')}</div> : <EmptyState language={language} state={waterQualityView} label={tx('CPCB water-quality data')} />}
             {waterQualityPayload && <p className="environment-note">{asText(waterQualityPayload.note)} · <a href="https://nwdp.nwic.gov.in/en/dataset/surface-water-quality-manual-chemical-parameters-cpcb" target="_blank" rel="noreferrer">National Water Data Portal · CPCB</a></p>}
           </article>
         </section>
 
         <section className="content-grid waste-grid" aria-label="Simulated waste collection automation">
           <article className="panel waste-panel">
-            <div className="panel-heading"><div><div className="section-kicker">SIMULATED WASTE MANAGEMENT</div><h2>Priority collection plan</h2></div><SourceBadge source={asText(wastePlan?.source, 'SIMULATED')} /></div>
+            <div className="panel-heading"><div><div className="section-kicker">SIMULATED WASTE MANAGEMENT</div><h2>{tx('Priority collection plan')}</h2></div><SourceBadge source={asText(wastePlan?.source, 'SIMULATED')} /></div>
             {wasteSummary ? <>
-              <p className="waste-plan-note">{asText(wastePlan?.methodology)} This is a demonstration model; readings are not connected to physical bins.</p>
+              <p className="waste-plan-note">{asText(wastePlan?.methodology)} {tx('This is a demonstration model; readings are not connected to physical bins.')}</p>
               <div className="waste-summary">
-                <div><span>PLANNED PICKUPS</span><strong>{asNumber(wasteSummary.pickups_planned)} <small>/ {asNumber(wasteSummary.pickups_recommended)} recommended</small></strong></div>
-                <div><span>WASTE ON ROUTE</span><strong>{asNumber(wasteSummary.planned_waste_kg).toFixed(1)} <small>kg</small></strong></div>
-                <div><span>OVERFLOW RISK</span><strong>{asNumber(wasteSummary.projected_overflow_risk_after)} <small>bins after · {asNumber(wasteSummary.projected_overflow_risk_before)} before</small></strong></div>
+                <div><span>{tx('PLANNED PICKUPS')}</span><strong>{asNumber(wasteSummary.pickups_planned)} <small>/ {asNumber(wasteSummary.pickups_recommended)} {tx('recommended')}</small></strong></div>
+                <div><span>{tx('WASTE ON ROUTE')}</span><strong>{asNumber(wasteSummary.planned_waste_kg).toFixed(1)} <small>kg</small></strong></div>
+                <div><span>{tx('OVERFLOW RISK')}</span><strong>{asNumber(wasteSummary.projected_overflow_risk_after)} <small>{tx('bins after')} · {asNumber(wasteSummary.projected_overflow_risk_before)} {tx('before')}</small></strong></div>
               </div>
-              <div className="table-wrap waste-table-wrap"><table className="waste-table"><thead><tr><th>BIN / ZONE</th><th>FILL NOW</th><th>PROJECTED 12H</th><th>EST. WASTE</th><th>ROUTE</th></tr></thead><tbody>
-                {wasteBins.map((bin) => <tr key={asText(bin.id)}><td><strong>{asText(bin.id)}</strong><span className="waste-zone">{asText(bin.zone)}</span></td><td>{asNumber(bin.fill_percent)}%</td><td>{asNumber(bin.projected_fill_12h)}%</td><td>{asNumber(bin.estimated_waste_kg).toFixed(1)} kg</td><td><span className={bin.selected === true ? 'waste-status waste-selected' : bin.pickup_recommended === true ? 'waste-status waste-deferred' : 'waste-status'}>{bin.selected === true ? 'PICKUP' : bin.pickup_recommended === true ? 'CAPACITY LIMITED' : 'MONITOR'}</span></td></tr>)}
+              <div className="table-wrap waste-table-wrap"><table className="waste-table"><thead><tr><th>{tx('BIN / ZONE')}</th><th>{tx('FILL NOW')}</th><th>{tx('PROJECTED 12H')}</th><th>{tx('EST. WASTE')}</th><th>{tx('ROUTE')}</th></tr></thead><tbody>
+                {wasteBins.map((bin) => <tr key={asText(bin.id)}><td><strong>{asText(bin.id)}</strong><span className="waste-zone">{asText(bin.zone)}</span></td><td>{asNumber(bin.fill_percent)}%</td><td>{asNumber(bin.projected_fill_12h)}%</td><td>{asNumber(bin.estimated_waste_kg).toFixed(1)} kg</td><td><span className={bin.selected === true ? 'waste-status waste-selected' : bin.pickup_recommended === true ? 'waste-status waste-deferred' : 'waste-status'}>{bin.selected === true ? tx('PICKUP') : bin.pickup_recommended === true ? tx('CAPACITY LIMITED') : tx('MONITOR')}</span></td></tr>)}
               </tbody></table></div>
-              <p className="environment-note">{asNumber(wasteSummary.bins_monitored)} simulated bins · {asNumber(wastePlan?.truck_capacity_kg)} kg vehicle capacity · priority threshold projected at 80%</p>
-            </> : <EmptyState state={data.wastePlan} label="Waste collection plan" />}
+              <p className="environment-note">{asNumber(wasteSummary.bins_monitored)} {tx('simulated bins')} · {asNumber(wastePlan?.truck_capacity_kg)} kg {tx('vehicle capacity')} · {tx('priority threshold projected at')} 80%</p>
+            </> : <EmptyState language={language} state={data.wastePlan} label={tx('Waste collection plan')} />}
           </article>
         </section>
         </div>
@@ -875,20 +908,20 @@ function App() {
         <div id="dashboard-panel-mobility" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-mobility" hidden={activeDashboardTab !== 'mobility'}>
           <section className="content-grid mobility-grid">
             <article className="panel mobility-panel" aria-labelledby="mobility-heading">
-              <div className="panel-heading"><div><div className="section-kicker">SUSTAINABLE MOBILITY</div><h2 id="mobility-heading">Compare your weekly commute</h2></div><SourceBadge source="ESTIMATED" /></div>
-              <p className="mobility-intro">Estimate commute emissions for one-way distance and days travelled, then compare a travel mode with a solo petrol-car baseline.</p>
+              <div className="panel-heading"><div><div className="section-kicker">{tx('SUSTAINABLE MOBILITY')}</div><h2 id="mobility-heading">{tx('Compare your weekly commute')}</h2></div><SourceBadge source="ESTIMATED" /></div>
+              <p className="mobility-intro">{tx('Estimate commute emissions for one-way distance and days travelled, then compare a travel mode with a solo petrol-car baseline.')}</p>
               <form className="mobility-form" onSubmit={(event) => void runMobilityEstimate(event)}>
-                <label>One-way distance <span><input type="number" min="0.1" max="500" step="0.1" required value={mobilityDistance} onChange={(event) => setMobilityDistance(event.target.value)} /> km</span></label>
-                <label>Commute days each week <select value={mobilityDays} onChange={(event) => setMobilityDays(Number(event.target.value))}>{Array.from({ length: 7 }, (_, index) => index + 1).map((days) => <option key={days} value={days}>{days} {days === 1 ? 'day' : 'days'}</option>)}</select></label>
-                <label>Travel mode <select value={mobilityMode} onChange={(event) => setMobilityMode(event.target.value)}><option value="local_bus">Local bus</option><option value="national_rail">National rail</option><option value="motorbike">Motorbike</option><option value="electric_car">Battery electric car</option><option value="petrol_car">Petrol car</option></select></label>
-                <button className="mobility-submit" type="submit" disabled={mobilityLoading}>{mobilityLoading ? 'Calculating…' : 'Calculate weekly impact'}</button>
+                <label>{tx('One-way distance')} <span><input type="number" min="0.1" max="500" step="0.1" required value={mobilityDistance} onChange={(event) => setMobilityDistance(event.target.value)} /> {tx('km')}</span></label>
+                <label>{tx('Commute days each week')} <select value={mobilityDays} onChange={(event) => setMobilityDays(Number(event.target.value))}>{Array.from({ length: 7 }, (_, index) => index + 1).map((days) => <option key={days} value={days}>{days} {tx('days')}</option>)}</select></label>
+                <label>{tx('Travel mode')} <select value={mobilityMode} onChange={(event) => setMobilityMode(event.target.value)}><option value="local_bus">{tx('Local bus')}</option><option value="national_rail">{tx('National rail')}</option><option value="motorbike">{tx('Motorbike')}</option><option value="electric_car">{tx('Battery electric car')}</option><option value="petrol_car">{tx('Petrol car')}</option></select></label>
+                <button className="mobility-submit" type="submit" disabled={mobilityLoading}>{mobilityLoading ? tx('Calculating…') : tx('Calculate weekly impact')}</button>
               </form>
               {mobilityError && <p className="mobility-error" role="alert">{mobilityError}</p>}
               {mobilityEstimate && <div className="mobility-result" aria-live="polite">
-                <div className="mobility-result-highlight"><span>{mobilityEstimate.net_reduction_kgco2e_per_week >= 0 ? 'ESTIMATED REDUCTION' : 'ESTIMATED INCREASE'}</span><strong>{Math.abs(mobilityEstimate.net_reduction_kgco2e_per_week).toFixed(2)} <small>kgCO₂e / week</small></strong><p>Compared with {mobilityEstimate.baseline.mode_name.toLowerCase()} for the same commute.</p></div>
-                <div className="mobility-result-grid"><div><span>SOLO PETROL-CAR BASELINE</span><strong>{mobilityEstimate.baseline.emissions_kgco2e_per_week.toFixed(2)} <small>kgCO₂e / week</small></strong></div><div><span>{mobilityEstimate.selected.mode_name.toUpperCase()}</span><strong>{mobilityEstimate.selected.emissions_kgco2e_per_week.toFixed(2)} <small>kgCO₂e / week</small></strong><small>Factor basis: {mobilityEstimate.selected.factor_basis}</small></div></div>
+                <div className="mobility-result-highlight"><span>{mobilityEstimate.net_reduction_kgco2e_per_week >= 0 ? tx('ESTIMATED REDUCTION') : tx('ESTIMATED INCREASE')}</span><strong>{Math.abs(mobilityEstimate.net_reduction_kgco2e_per_week).toFixed(2)} <small>kgCO₂e / {tx('week')}</small></strong><p>{tx('Compared with')} {tx(mobilityEstimate.baseline.mode_name.toLowerCase())} {tx('for the same commute.')}</p></div>
+                <div className="mobility-result-grid"><div><span>{tx('SOLO PETROL-CAR BASELINE')}</span><strong>{mobilityEstimate.baseline.emissions_kgco2e_per_week.toFixed(2)} <small>kgCO₂e / {tx('week')}</small></strong></div><div><span>{mobilityEstimate.selected.mode_name.toUpperCase()}</span><strong>{mobilityEstimate.selected.emissions_kgco2e_per_week.toFixed(2)} <small>kgCO₂e / {tx('week')}</small></strong><small>{tx('Factor basis:')} {mobilityEstimate.selected.factor_basis}</small></div></div>
                 <p className="mobility-methodology">{mobilityEstimate.methodology}</p>
-                <p className="environment-note">Factors: <a href={mobilityEstimate.factor_source_url} target="_blank" rel="noreferrer">{mobilityEstimate.factor_source}</a>. These are indicative estimates, not measured trip emissions.</p>
+                <p className="environment-note">{tx('Factors:')} <a href={mobilityEstimate.factor_source_url} target="_blank" rel="noreferrer">{mobilityEstimate.factor_source}</a>. {tx('These are indicative estimates, not measured trip emissions.')}</p>
               </div>}
             </article>
           </section>
@@ -897,32 +930,32 @@ function App() {
         <div id="dashboard-panel-reports" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-reports" hidden={activeDashboardTab !== 'reports'}>
         <section className="content-grid report-grid">
           <article className="panel report-panel">
-              <div className="panel-heading"><div><div className="section-kicker">DAILY AUTOGENERATED BRIEF</div><h2>Latest report</h2></div><span className="report-mark"><ReportIcon /></span></div>
-            {latestReport ? <><p className="report-copy">{asText(latestReport.body, 'Report is empty.')}</p><div className="report-meta"><span>{formatTime(latestReport.created_at, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span><SourceBadge source={asText(latestReport.source, 'SIMULATED')} /></div></> : <EmptyState state={data.latestReport} label="Latest report" />}
+              <div className="panel-heading"><div><div className="section-kicker">{tx('DAILY AUTOGENERATED BRIEF')}</div><h2>{tx('Latest report')}</h2></div><span className="report-mark"><ReportIcon /></span></div>
+            {latestReport ? <><p className="report-copy">{asText(latestReport.body, 'Report is empty.')}</p><div className="report-meta"><span>{formatDate(latestReport.created_at, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span><SourceBadge source={asText(latestReport.source, 'SIMULATED')} /></div></> : <EmptyState language={language} state={data.latestReport} label={tx('Latest report')} />}
           </article>
           <article className="panel report-history-panel">
-              <div className="panel-heading"><div><div className="section-kicker">REPORT ARCHIVE</div><h2>Recent reports</h2></div><span className="count-chip">{reportsRows.length} reports</span></div>
-            {reportsRows.length ? <div className="report-history">{reportsRows.slice(0, 4).map((item, index) => <button className="history-row" type="button" key={`${String(item.created_at)}-${index}`} aria-label={`Open report from ${formatTime(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`} onClick={() => setSelectedReport(item)}><span className="history-icon"><ReportIcon /></span><div><strong>{formatTime(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</strong><span>{asText(item.body, 'Daily grid summary')}</span></div><span className="history-arrow" aria-hidden="true">↗</span></button>)}</div> : <EmptyState state={data.reports} label="Reports" />}
+              <div className="panel-heading"><div><div className="section-kicker">{tx('REPORT ARCHIVE')}</div><h2>{tx('Recent reports')}</h2></div><span className="count-chip">{reportsRows.length} reports</span></div>
+            {reportsRows.length ? <div className="report-history">{reportsRows.slice(0, 4).map((item, index) => <button className="history-row" type="button" key={`${String(item.created_at)}-${index}`} aria-label={`Open report from ${formatDate(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`} onClick={() => setSelectedReport(item)}><span className="history-icon"><ReportIcon /></span><div><strong>{formatDate(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</strong><span>{asText(item.body, 'Daily grid summary')}</span></div><span className="history-arrow" aria-hidden="true">↗</span></button>)}</div> : <EmptyState language={language} state={data.reports} label={tx('Reports')} />}
           </article>
         </section>
         </div>
 
-        <footer className="page-footer"><span>NRG <b>·</b> Autonomous Grid Carbon Optimizer</span><span>{lastUpdated ? `Updated ${formatTime(lastUpdated.toISOString())}` : 'Connecting to API'} <b>·</b> <a href={`${API_BASE.replace('/api/v1', '')}/docs`} target="_blank" rel="noreferrer">API docs ↗</a></span></footer>
+        <footer className="page-footer"><span>NRG <b>·</b> Autonomous Grid Carbon Optimizer</span><span>{lastUpdated ? `${tx('Updated')} ${formatDate(lastUpdated.toISOString())}` : tx('Connecting to API')} <b>·</b> <a href={`${API_BASE.replace('/api/v1', '')}/docs`} target="_blank" rel="noreferrer">{tx('API docs ↗')}</a></span></footer>
       </div>
       <dialog className="report-dialog" ref={reportDialogRef} aria-labelledby="report-dialog-title" onClose={() => setSelectedReport(null)}>
         {selectedReport && <div className="report-dialog-content">
-          <div className="location-dialog-heading"><div><div className="section-kicker">REPORT ARCHIVE</div><h2 id="report-dialog-title">Report details</h2></div><button className="report-dialog-close" type="button" aria-label="Close report" onClick={() => setSelectedReport(null)}>×</button></div>
-          <div className="report-dialog-meta"><span>{formatTime(selectedReport.created_at, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span><SourceBadge source={asText(selectedReport.source, 'SIMULATED')} /></div>
+          <div className="location-dialog-heading"><div><div className="section-kicker">{tx('REPORT ARCHIVE')}</div><h2 id="report-dialog-title">{tx('Report details')}</h2></div><button className="report-dialog-close" type="button" aria-label={tx('Close report')} onClick={() => setSelectedReport(null)}>×</button></div>
+          <div className="report-dialog-meta"><span>{formatDate(selectedReport.created_at, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span><SourceBadge source={asText(selectedReport.source, 'SIMULATED')} /></div>
           <p className="report-dialog-body">{asText(selectedReport.body, 'Report is empty.')}</p>
         </div>}
       </dialog>
       <dialog className="location-dialog" ref={locationDialogRef} aria-labelledby="location-dialog-title" onClose={() => setMapOpen(false)}>
         <div className="location-dialog-content">
-          <div className="location-dialog-heading"><div><div className="section-kicker">GRID LOCATION</div><h2 id="location-dialog-title">Choose a point on the map</h2></div><button className="report-dialog-close" type="button" aria-label="Close map" onClick={() => setMapOpen(false)}>×</button></div>
-          <p className="location-map-help">Click the map, or paste a Zoom Earth map URL to import its map center. Open-Meteo resolves the IANA timezone when you apply the point.</p>
-          <div className="zoom-earth-import"><label htmlFor="zoom-earth-url">ZOOM EARTH MAP URL</label><div><input id="zoom-earth-url" type="url" value={zoomEarthUrl} onChange={(event) => setZoomEarthUrl(event.target.value)} placeholder="https://zoom.earth/maps/satellite/#view=..." /><button type="button" onClick={importZoomEarthLocation}>Import</button></div>{zoomEarthError && <span role="alert">{zoomEarthError}</span>}</div>
+          <div className="location-dialog-heading"><div><div className="section-kicker">GRID LOCATION</div><h2 id="location-dialog-title">{tx('Choose a point on the map')}</h2></div><button className="report-dialog-close" type="button" aria-label={tx('Close map')} onClick={() => setMapOpen(false)}>×</button></div>
+          <p className="location-map-help">{tx('Click the map, or paste a Zoom Earth map URL to import its map center. Open-Meteo resolves the IANA timezone when you apply the point.')}</p>
+          <div className="zoom-earth-import"><label htmlFor="zoom-earth-url">{tx('ZOOM EARTH MAP URL')}</label><div><input id="zoom-earth-url" type="url" value={zoomEarthUrl} onChange={(event) => setZoomEarthUrl(event.target.value)} placeholder="https://zoom.earth/maps/satellite/#view=..." /><button type="button" onClick={importZoomEarthLocation}>{tx('Import')}</button></div>{zoomEarthError && <span role="alert">{zoomEarthError}</span>}</div>
           {mapOpen && <LocationPicker point={mapPoint} onSelect={setMapPoint} />}
-          <div className="location-map-footer"><span>{mapPoint.latitude.toFixed(4)}, {mapPoint.longitude.toFixed(4)}</span><a href={`https://zoom.earth/maps/satellite/#view=${mapPoint.latitude.toFixed(4)},${mapPoint.longitude.toFixed(4)},6z`} target="_blank" rel="noreferrer">View this point in Zoom Earth ↗</a></div>
+          <div className="location-map-footer"><span>{mapPoint.latitude.toFixed(4)}, {mapPoint.longitude.toFixed(4)}</span><a href={`https://zoom.earth/maps/satellite/#view=${mapPoint.latitude.toFixed(4)},${mapPoint.longitude.toFixed(4)},6z`} target="_blank" rel="noreferrer">{tx('View this point in Zoom Earth ↗')}</a></div>
           {locationError && <span className="location-error" role="alert">{locationError}</span>}
           <button className="map-apply-button" type="button" disabled={locationLoading} onClick={() => void applyMapLocation()}>{locationLoading ? t('resolving') : t('applyLocation')}</button>
         </div>
@@ -930,15 +963,15 @@ function App() {
     </main>
   ) : (
     <main className="location-start-shell">
-      <header className="location-start-header"><a className="brand" href="#location-start" aria-label="NRG home"><span className="brand-mark"><PulseIcon /></span><span>NRG</span></a><label className="language-control"><span className="sr-only">{t('language')}</span><select aria-label={t('language')} value={language} onChange={(event) => { if (isLanguageCode(event.target.value)) setLanguage(event.target.value) }}>{Object.entries(languages).map(([code, item]) => <option key={code} value={code}>{item.label}</option>)}</select></label><span>{t('setup')}</span></header>
+      <header className="location-start-header"><a className="brand" href="#location-start" aria-label={tx('NRG home')}><span className="brand-mark"><PulseIcon /></span><span>NRG</span></a><label className="language-control"><span className="sr-only">{t('language')}</span><select aria-label={t('language')} value={language} onChange={(event) => { if (isLanguageCode(event.target.value)) setLanguage(event.target.value) }}>{Object.entries(languages).map(([code, item]) => <option key={code} value={code}>{item.label}</option>)}</select></label><span>{t('setup')}</span></header>
       <section className="location-start-content" id="location-start">
         <div className="eyebrow"><span className="eyebrow-line" /> {t('firstLocation')}</div>
         <h1>{t('chooseWhere')}<br /><span>{t('gridLives')}</span></h1>
-        <p className="location-start-copy">Select a point on the map or import its position from Zoom Earth. We’ll resolve the timezone, save your location, and then load the dashboard.</p>
+        <p className="location-start-copy">{tx('Select a point on the map or import its position from Zoom Earth. We’ll resolve the timezone, save your location, and then load the dashboard.')}</p>
         <div className="location-start-map-card">
-          <div className="zoom-earth-import"><label htmlFor="startup-zoom-earth-url">ZOOM EARTH MAP URL</label><div><input id="startup-zoom-earth-url" type="url" value={zoomEarthUrl} onChange={(event) => setZoomEarthUrl(event.target.value)} placeholder="https://zoom.earth/maps/satellite/#view=..." /><button type="button" onClick={importZoomEarthLocation}>Import</button></div>{zoomEarthError && <span role="alert">{zoomEarthError}</span>}</div>
+          <div className="zoom-earth-import"><label htmlFor="startup-zoom-earth-url">{tx('ZOOM EARTH MAP URL')}</label><div><input id="startup-zoom-earth-url" type="url" value={zoomEarthUrl} onChange={(event) => setZoomEarthUrl(event.target.value)} placeholder="https://zoom.earth/maps/satellite/#view=..." /><button type="button" onClick={importZoomEarthLocation}>{tx('Import')}</button></div>{zoomEarthError && <span role="alert">{zoomEarthError}</span>}</div>
           <LocationPicker point={mapPoint} onSelect={setMapPoint} />
-          <div className="location-start-map-footer"><span>{mapPoint.latitude.toFixed(4)}, {mapPoint.longitude.toFixed(4)} · saved zone: {locationTimezone}</span><a href={`https://zoom.earth/maps/satellite/#view=${mapPoint.latitude.toFixed(4)},${mapPoint.longitude.toFixed(4)},6z`} target="_blank" rel="noreferrer">Open selected point in Zoom Earth ↗</a></div>
+          <div className="location-start-map-footer"><span>{mapPoint.latitude.toFixed(4)}, {mapPoint.longitude.toFixed(4)} · saved zone: {locationTimezone}</span><a href={`https://zoom.earth/maps/satellite/#view=${mapPoint.latitude.toFixed(4)},${mapPoint.longitude.toFixed(4)},6z`} target="_blank" rel="noreferrer">{tx('Open selected point in Zoom Earth ↗')}</a></div>
           {locationError && <p className="location-start-error" role="alert">{locationError}</p>}
           <button className="location-start-submit" type="button" disabled={locationLoading} onClick={() => void applyMapLocation(true)}>{locationLoading ? 'Loading saved location…' : 'Resolve timezone & open dashboard'}</button>
         </div>
@@ -952,17 +985,19 @@ function MetricCard({ label, value, unit, note, tone, icon, badge }: { label: st
   return <article className={`metric-card metric-${tone}`}><div className="metric-card-top"><span>{label}</span><span className="metric-icon">{icon}</span></div><div className="metric-value">{value}<small>{unit}</small></div><div className="metric-bottom"><span>{note}</span><SourceBadge source={badge} /></div></article>
 }
 
-function InsightItem({ item }: { item: Record<string, unknown> }) {
+function InsightItem({ item, language }: { item: Record<string, unknown>; language: LanguageCode }) {
+  const tx = (text: string) => translateText(language, text)
   const type = asText(item.type)
-  if (type === 'biggest_saving') return <div className="insight-item"><span className="insight-icon insight-green"><LeafIcon /></span><div><span>BIGGEST SAVING</span><strong>{asNumber(item.saving_g).toFixed(0)} gCO₂ <small>· load #{asText(item.load_id, '—')}</small></strong></div></div>
-  if (type === 'cleanest_window_tomorrow') return <div className="insight-item"><span className="insight-icon insight-yellow"><SunIcon /></span><div><span>CLEANEST WINDOW · TOMORROW</span><strong>{formatTime(item.timestamp)} <small>· {item.intensity_gco2_kwh == null ? '—' : `${Math.round(asNumber(item.intensity_gco2_kwh))} gCO₂/kWh`}</small></strong></div></div>
-  return <div className="insight-item"><span className="insight-icon insight-orange"><BoltIcon /></span><div><span>HIGHEST INTENSITY FORECAST</span><strong>{formatTime(item.timestamp)} <small>· {item.intensity_gco2_kwh == null ? '—' : `${Math.round(asNumber(item.intensity_gco2_kwh))} gCO₂/kWh`}</small></strong></div></div>
+  if (type === 'biggest_saving') return <div className="insight-item"><span className="insight-icon insight-green"><LeafIcon /></span><div><span>{tx('BIGGEST SAVING')}</span><strong>{asNumber(item.saving_g).toFixed(0)} gCO₂ <small>· load #{asText(item.load_id, '—')}</small></strong></div></div>
+  if (type === 'cleanest_window_tomorrow') return <div className="insight-item"><span className="insight-icon insight-yellow"><SunIcon /></span><div><span>{tx('CLEANEST WINDOW · TOMORROW')}</span><strong>{formatTime(item.timestamp, undefined, languages[language].locale)} <small>· {item.intensity_gco2_kwh == null ? '—' : `${Math.round(asNumber(item.intensity_gco2_kwh))} gCO₂/kWh`}</small></strong></div></div>
+  return <div className="insight-item"><span className="insight-icon insight-orange"><BoltIcon /></span><div><span>{tx('HIGHEST INTENSITY FORECAST')}</span><strong>{formatTime(item.timestamp, undefined, languages[language].locale)} <small>· {item.intensity_gco2_kwh == null ? '—' : `${Math.round(asNumber(item.intensity_gco2_kwh))} gCO₂/kWh`}</small></strong></div></div>
 }
 
-function EmptyState({ state, label }: { state: ViewState; label: string }) {
-  if (state.status === 'loading') return <div className="empty-state"><span className="loading-spinner" /> Loading {label.toLowerCase()}…</div>
-  if (state.status === 'error') return <div className="empty-state empty-error"><strong>{label} unavailable</strong><span>{state.error}. Check the API and CORS settings.</span></div>
-  return <div className="empty-state">No {label.toLowerCase()} available yet.</div>
+function EmptyState({ state, label, language }: { state: ViewState; label: string; language: LanguageCode }) {
+  const tx = (text: string) => translateText(language, text)
+  if (state.status === 'loading') return <div className="empty-state"><span className="loading-spinner" /> {tx('Loading')} {label.toLowerCase()}…</div>
+  if (state.status === 'error') return <div className="empty-state empty-error"><strong>{label} {tx('unavailable')}</strong><span>{state.error}. {tx('Check the API and CORS settings.')}</span></div>
+  return <div className="empty-state">{tx('No')} {label.toLowerCase()} {tx('available yet')}.</div>
 }
 
 function SourceBadge({ source }: { source: string }) {

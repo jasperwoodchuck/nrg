@@ -2,9 +2,11 @@ from datetime import datetime, timedelta, timezone
 
 from app.simulator.fleet import KINDS
 
+AVERAGE_HOUSEHOLD_DAILY_KWH = 1805 / 365
+
 
 def run_scenario(forecast_rows: list[dict], households: int, max_concurrent_loads: int = 12) -> dict:
-    """Build an in-memory virtual fleet and compare typical-time vs optimized use."""
+    """Estimate flexible appliance scheduling from BEE's average household use."""
     forecasts = [
         {
             "timestamp": row["timestamp"].replace(tzinfo=timezone.utc)
@@ -22,9 +24,11 @@ def run_scenario(forecast_rows: list[dict], households: int, max_concurrent_load
     daily_average = sum(intensities.values()) / len(intensities)
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     loads = []
+    average_profile_kwh = sum((minimum_kwh + maximum_kwh) / 2 for minimum_kwh, maximum_kwh, *_ in KINDS.values())
+    profile_scale = AVERAGE_HOUSEHOLD_DAILY_KWH / average_profile_kwh
     for household in range(1, households + 1):
         for kind, (minimum_kwh, maximum_kwh, duration, usual_hour, deadline_hour) in KINDS.items():
-            energy_kwh = round((minimum_kwh + maximum_kwh) / 2, 2)
+            energy_kwh = round((minimum_kwh + maximum_kwh) / 2 * profile_scale, 4)
             baseline_at = now.replace(hour=usual_hour)
             if baseline_at < now:
                 baseline_at += timedelta(days=1)
@@ -107,7 +111,7 @@ def run_scenario(forecast_rows: list[dict], households: int, max_concurrent_load
     return {
         "source": "SIMULATED",
         "forecast_source": forecast_source,
-        "methodology": f"Typical-time baseline compared with the lowest-intensity feasible forecast window. Loads are assigned by earliest deadline with a cap of {max_concurrent_loads} simultaneous virtual loads. Energy use stays constant. Virtual loads only; no devices are controlled.",
+        "methodology": f"Estimated from the Bureau of Energy Efficiency survey mean of 1,805 kWh per household-year (4.95 kWh/day). The flexible appliance mix and timing are modeled; its energy is scaled to that average and scheduled against the lowest-intensity feasible forecast window with a cap of {max_concurrent_loads} simultaneous estimated loads. Energy use stays constant. This is an estimate, not household meter data; no devices are controlled.",
         "summary": {
             "households": households,
             "max_concurrent_loads": max_concurrent_loads,
