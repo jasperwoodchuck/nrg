@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.values import FACTOR_SET_VERSION
 from app.core.config import settings
-from app.db.database import Base, engine, get_session, SessionLocal
+from app.db.database import initialize_database, get_session, SessionLocal
 from app.db.models import AppState, CacheRecord, ForecastRecord, Report, ScenarioRun, VirtualLoad
 from app.modules.impact.service import completed_rows, metric, range_start
 from app.modules.impact.engine import summarize
@@ -52,7 +52,7 @@ class MobilityEstimateInput(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    initialize_database()
     with SessionLocal() as session:
         restore_location(session)
     jobs.guarded("startup", jobs.initial_backfill)
