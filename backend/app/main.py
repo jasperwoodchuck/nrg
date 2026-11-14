@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, desc, select, update
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
+import httpx
 from app.core.values import FACTOR_SET_VERSION
 from app.core.config import settings
 from app.db.database import initialize_database, get_session, SessionLocal
@@ -45,6 +47,16 @@ from app.scheduler import jobs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 scheduler = BackgroundScheduler(timezone="UTC")
+
+
+def keep_alive_ping() -> None:
+    port = os.getenv("PORT", "8000")
+    try:
+        response = httpx.get(f"http://127.0.0.1:{port}/api/v1/health", timeout=10.0)
+        response.raise_for_status()
+        logger.info("Keep-alive ping succeeded")
+    except httpx.HTTPError:
+        logger.exception("Keep-alive ping failed")
 
 
 class ScenarioInput(BaseModel):
@@ -88,6 +100,7 @@ async def lifespan(app: FastAPI):
         restore_location(session)
     jobs.guarded("startup", jobs.initial_backfill)
     jobs.guarded("report", jobs.daily_report_job)
+    scheduler.add_job(keep_alive_ping, "interval", minutes=5, id="keep_alive_ping", max_instances=1, coalesce=True)
     scheduler.add_job(jobs.pipeline_job, "interval", minutes=15, id="collector_then_optimizer", max_instances=1, coalesce=True)
     scheduler.add_job(lambda: jobs.guarded("simulator", jobs.simulator_job), "interval", minutes=15, id="simulator", max_instances=1, coalesce=True)
     scheduler.add_job(lambda: jobs.guarded("impact", jobs.impact_job), "interval", hours=1, id="impact", max_instances=1, coalesce=True)
