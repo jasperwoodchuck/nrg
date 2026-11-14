@@ -472,6 +472,8 @@ function App() {
 
   const generateAiInsight = async () => {
     setAiInsightLoading(true)
+    setAiInsight(null)
+    setAiInsightConfidence(null)
     setAiInsightError(null)
     try {
       const result = await postJson('/insights/ai', {})
@@ -647,6 +649,7 @@ function App() {
       if (isRecord(response) && isRecord(response.location) && typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
       if (isRecord(response) && typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
       await refresh(location.id, null)
+      void generateAiInsight()
     } catch (error) {
       setLocationError(error instanceof Error ? error.message : 'Could not update the location')
     } finally {
@@ -667,6 +670,7 @@ function App() {
       setScenarioResult(null)
       if (isRecord(response) && isRecord(response.location) && typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
       if (isRecord(response) && typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
+      void generateAiInsight()
       if (openDashboard) setShowDashboard(true)
       else {
         setMapOpen(false)
@@ -870,6 +874,19 @@ function App() {
         </section>
         {publicGridPayload && <p className="public-grid-attribution">{tx('Demand:')} <a href="https://npp.gov.in/" target="_blank" rel="noreferrer">National Power Portal · MERIT</a> · {tx('Daily supply:')} <a href="https://grid-india.in/" target="_blank" rel="noreferrer">Grid-India</a> · {tx('data via')} <a href="https://www.energymap.in/developer/mcp/public" target="_blank" rel="noreferrer">India Energy Atlas</a>{selectedLocationId === 'custom' && customGridState ? <> · Region resolved with <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a></> : selectedLocationId === 'custom' ? ` · ${tx('state not resolved for this map point; showing All India data')}` : ''}{publicGridPayload.stale === true ? ` · ${tx('showing cached data')}` : ''}</p>}
 
+        <section className="ai-insight ai-overview-card" aria-label={tx('AI GRID INSIGHT')}>
+          <div className="ai-insight-heading">
+            <div className="ai-insight-title"><GeminiBrand /><span>{tx('AI GRID INSIGHT')}</span></div>
+            <button className="refresh-button" type="button" onClick={() => void generateAiInsight()} disabled={aiInsightLoading}>
+              {aiInsightLoading ? tx('Generating…') : aiInsight ? tx('Regenerate') : tx('Generate insight')}
+            </button>
+          </div>
+          {aiInsightLoading && !aiInsight && <p className="ai-insight-copy" role="status">{tx('Generating…')}</p>}
+          {aiInsightError && <p className="ai-insight-error" role="alert">{aiInsightError}</p>}
+          {aiInsight && <><p className="ai-insight-copy" aria-live="polite">{aiInsight}</p>{aiInsightConfidence && <ConfidenceDisplay confidence={aiInsightConfidence} language={language} />}</>}
+          <span className="ai-insight-note">{tx('AI-generated from simulated loads and forecast data.')}</span>
+        </section>
+
         <section className="panel scenario-panel" aria-labelledby="scenario-heading">
           <div className="scenario-intro">
             <div>
@@ -941,17 +958,6 @@ function App() {
             {insightRows.length ? <div className="insight-list">
               {insightRows.map((item, index) => <InsightItem key={`${String(item.type)}-${index}`} item={item} language={language} timeZone={locationTimezone} />)}
             </div> : <EmptyState language={language} state={data.insights} label={tx('Insights')} />}
-            <div className="ai-insight">
-              <div className="ai-insight-heading">
-                <div className="ai-insight-title"><GeminiBrand /><span>{tx('AI GRID INSIGHT')}</span></div>
-                <button className="refresh-button" type="button" onClick={() => void generateAiInsight()} disabled={aiInsightLoading}>
-                  {aiInsightLoading ? tx('Generating…') : aiInsight ? tx('Regenerate') : tx('Generate insight')}
-                </button>
-              </div>
-              {aiInsightError && <p className="ai-insight-error" role="alert">{aiInsightError}</p>}
-              {aiInsight && <><p className="ai-insight-copy" aria-live="polite">{aiInsight}</p>{aiInsightConfidence && <ConfidenceDisplay confidence={aiInsightConfidence} language={language} />}</>}
-              <span className="ai-insight-note">{tx('AI-generated from simulated loads and forecast data.')}</span>
-            </div>
             <div className="health-strip">
               <span className="health-icon"><PulseIcon /></span>
               <div><strong>{tx('Pipeline health')}</strong><span>{healthPayload?.scheduler === 'running' ? 'Scheduler running' : asText(healthPayload?.status, 'Waiting for API')}</span></div>
