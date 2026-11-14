@@ -1,6 +1,6 @@
 # NRG Autonomous Grid Carbon Optimizer
 
-Hackathon MVP with a minimal dashboard for simulated carbon-aware flexible-load scheduling. The virtual fleet never represents metered customers; all load and impact outcomes are simulated. Carbon intensity is estimated from cached Open-Meteo weather using a configurable fallback model.
+Hackathon MVP with a minimal dashboard for simulated carbon-aware flexible-load scheduling. The virtual fleet never represents metered customers; all load and impact outcomes are simulated. Carbon intensity is estimated from cached Open-Meteo weather using a configurable fallback model
 
 ## Run
 
