@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.collectors import open_meteo
 from app.collectors.open_meteo import URL, VARS, collect_weather
+from app.modules.energy.location import weather_cache_key
 from app.core.config import settings
 from app.db.models import AppState, CacheRecord, ForecastRecord
 
@@ -76,9 +77,10 @@ def test_live_request_uses_open_meteo_parameters_and_caches_source(db_session):
             },
         )
     ]
-    cache = db_session.scalar(select(CacheRecord).where(CacheRecord.source == "open_meteo"))
+    cache_key = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
+    cache = db_session.scalar(select(CacheRecord).where(CacheRecord.source == cache_key))
     assert cache is not None and json.loads(cache.payload) == payload
-    success = db_session.get(AppState, "last_source_success:open_meteo")
+    success = db_session.get(AppState, f"last_source_success:{cache_key}")
     assert success is not None and success.value
     assert all(row.source == "ESTIMATED" for row in rows)
     assert all("wind_speed_80m" in json.loads(row.weather_json) for row in rows)
@@ -93,7 +95,8 @@ def test_live_hourly_local_time_is_normalized_to_utc(db_session):
 def test_timeout_uses_latest_valid_cached_response_without_raising(db_session, monkeypatch):
     monkeypatch.setattr(open_meteo.time, "sleep", lambda seconds: None)
     cached = sample_payload(["2026-01-01T12:00"])
-    db_session.add(CacheRecord(source="open_meteo", payload=json.dumps(cached), fetched_at=datetime.now(timezone.utc)))
+    cache_key = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
+    db_session.add(CacheRecord(source=cache_key, payload=json.dumps(cached), fetched_at=datetime.now(timezone.utc)))
     db_session.commit()
     client = MockClient(error=httpx.TimeoutException("timeout"))
 
@@ -107,7 +110,8 @@ def test_timeout_uses_latest_valid_cached_response_without_raising(db_session, m
 def test_malformed_json_uses_cache_and_retries(db_session, monkeypatch):
     monkeypatch.setattr(open_meteo.time, "sleep", lambda seconds: None)
     cached = sample_payload(["2026-01-01T12:00"])
-    db_session.add(CacheRecord(source="open_meteo", payload=json.dumps(cached), fetched_at=datetime.now(timezone.utc)))
+    cache_key = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
+    db_session.add(CacheRecord(source=cache_key, payload=json.dumps(cached), fetched_at=datetime.now(timezone.utc)))
     db_session.commit()
     invalid_json = json.JSONDecodeError("invalid JSON", "{", 0)
     client = MockClient([MockResponse(json_error=invalid_json) for _ in range(3)])
@@ -137,8 +141,8 @@ def test_latest_corrupt_cache_is_skipped_for_older_valid_cache(db_session, monke
     monkeypatch.setattr(open_meteo.time, "sleep", lambda seconds: None)
     valid = sample_payload(["2026-01-01T12:00"])
     db_session.add_all([
-        CacheRecord(source="open_meteo", payload=json.dumps(valid), fetched_at=datetime.now(timezone.utc) - timedelta(minutes=5)),
-        CacheRecord(source="open_meteo", payload="{broken", fetched_at=datetime.now(timezone.utc)),
+        CacheRecord(source=weather_cache_key(settings.latitude, settings.longitude, settings.timezone), payload=json.dumps(valid), fetched_at=datetime.now(timezone.utc) - timedelta(minutes=5)),
+        CacheRecord(source=weather_cache_key(settings.latitude, settings.longitude, settings.timezone), payload="{broken", fetched_at=datetime.now(timezone.utc)),
     ])
     db_session.commit()
 
@@ -146,3 +150,18 @@ def test_latest_corrupt_cache_is_skipped_for_older_valid_cache(db_session, monke
 
     assert rows and rows[0].source == "CACHED"
     assert len(rows) == 1
+
+
+
+def test_cache_from_another_location_is_not_reused(db_session, monkeypatch):
+    monkeypatch.setattr(open_meteo.time, "sleep", lambda seconds: None)
+    default_key = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
+    db_session.add(CacheRecord(source=default_key, payload=json.dumps(sample_payload(["2026-01-01T12:00"])), fetched_at=datetime.now(timezone.utc)))
+    db_session.commit()
+    monkeypatch.setattr(settings, "latitude", 19.0760)
+    monkeypatch.setattr(settings, "longitude", 72.8777)
+
+    rows = collect_weather(db_session, MockClient(error=httpx.ConnectError("offline")))
+
+    assert len(rows) == 72
+    assert all(row.source == "ESTIMATED" for row in rows)

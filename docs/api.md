@@ -1,6 +1,6 @@
 # API (v1)
 
-All routes are read-only JSON except the demo operator control endpoint. OpenAPI is available at `/docs`. Errors use `{ "error": { "code": "request_error", "message": "...", "details": {} } }`.
+Routes are read-only JSON except the location selector and demo operator control endpoints. OpenAPI is available at `/docs`. Errors use `{ "error": { "code": "request_error", "message": "...", "details": {} } }`.
 
 - `GET /api/v1/impact/summary?range=24h|7d|30d`: headline CO2, percent vs both baselines, completed load count, shifted kWh, and methodology.
 - `GET /api/v1/impact/metrics/{key}?range=...`: `co2_saved`, `co2_saved_baseline_b`, `kwh_shifted`, or `loads_optimized`; each includes `value`, `unit`, `inputs`, `factor_set_version`, `source`, `formula_id`, and `computed_at`.
@@ -10,6 +10,21 @@ All routes are read-only JSON except the demo operator control endpoint. OpenAPI
 - `GET /api/v1/insights`: biggest saving, cleanest forecast hour tomorrow, and highest forecast intensity.
 - `GET /api/v1/reports/latest` and `GET /api/v1/reports`: generated report(s).
 - `GET /api/v1/health`: scheduler state, last successful job timestamps, data mode, and cache age.
+- `GET /api/v1/location`: current latitude, longitude, timezone, and weather source.
+- `POST /api/v1/location`: update location with `{ "latitude": 19.0760, "longitude": 72.8777, "timezone": "Asia/Kolkata" }`. Timezone is optional and must be an IANA timezone when provided. The backend persists this selection, isolates weather cache by location, replaces old forecasts, and reschedules pending loads. It returns the selected location, weather source badge, intensity source badge, and forecast row count.
+
+Example location response:
+
+```json
+{
+  "location": {"latitude": 19.076, "longitude": 72.8777, "timezone": "Asia/Kolkata"},
+  "weather_source": "LIVE",
+  "intensity_source": "ESTIMATED",
+  "forecast_hours": 72
+}
+```
+
+The saved location is restored at startup and takes precedence over the initial latitude/longitude environment defaults.
 - `POST /api/v1/sim/control?action=start|stop|reseed|reset-demo`: demo control; the system does not need operator input to run.
 
 Example summary shape:

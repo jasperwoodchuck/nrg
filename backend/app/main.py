@@ -7,15 +7,24 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.values import FACTOR_SET_VERSION
 from app.core.config import settings
-from app.db.database import Base, engine, get_session
+from app.db.database import Base, engine, get_session, SessionLocal
 from app.db.models import AppState, ForecastRecord, Report, VirtualLoad
 from app.modules.impact.service import completed_rows, metric, range_start
 from app.modules.impact.engine import summarize
+from app.modules.energy.location import (
+    LocationInput,
+    current_location,
+    persist_location,
+    restore_location,
+    weather_cache_key,
+)
+from app.collectors.open_meteo import collect_weather
+from app.optimizer.service import optimize_pending
 from app.scheduler import jobs
 
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +34,8 @@ scheduler = BackgroundScheduler(timezone="UTC")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    with SessionLocal() as session:
+        restore_location(session)
     jobs.guarded("startup", jobs.initial_backfill)
     jobs.guarded("report", jobs.daily_report_job)
     scheduler.add_job(jobs.pipeline_job, "interval", minutes=15, id="collector_then_optimizer", max_instances=1, coalesce=True)
@@ -48,6 +59,54 @@ async def http_error_handler(request, exc: HTTPException):
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request, exc: RequestValidationError):
     return JSONResponse(status_code=422, content=jsonable_encoder({"error": {"code": "validation_error", "message": "Invalid request", "details": exc.errors()}}))
+
+
+@app.get("/api/v1/location")
+def get_location(session: Session = Depends(get_session)):
+    cache_source = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
+    mode = session.get(AppState, f"last_weather_mode:{cache_source}")
+    return {"location": current_location(), "weather_source": mode.value if mode else "ESTIMATED"}
+
+
+@app.post("/api/v1/location")
+def update_location(location: LocationInput, session: Session = Depends(get_session)):
+    timezone_name = location.timezone or settings.timezone
+    changed = (location.latitude, location.longitude, timezone_name) != (
+        settings.latitude,
+        settings.longitude,
+        settings.timezone,
+    )
+    if not changed:
+        return get_location(session)
+
+    settings.latitude = location.latitude
+    settings.longitude = location.longitude
+    settings.timezone = timezone_name
+    persist_location(session)
+    session.execute(delete(ForecastRecord))
+    session.execute(
+        update(VirtualLoad)
+        .where(VirtualLoad.status == "scheduled")
+        .values(
+            status="pending",
+            chosen_start=None,
+            optimized_intensity=None,
+            baseline_intensity=None,
+            daily_average_intensity=None,
+        )
+    )
+    session.commit()
+
+    forecast_rows = collect_weather(session)
+    optimize_pending(session)
+    cache_source = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
+    mode = session.get(AppState, f"last_weather_mode:{cache_source}")
+    return {
+        "location": current_location(),
+        "weather_source": mode.value if mode else "ESTIMATED",
+        "intensity_source": forecast_rows[0].source if forecast_rows else "ESTIMATED",
+        "forecast_hours": len(forecast_rows),
+    }
 
 
 @app.get("/api/v1/impact/summary")
@@ -120,9 +179,10 @@ def health(session: Session = Depends(get_session)):
     states = {row.key.removeprefix("last_success:"): row.value for row in session.scalars(select(AppState).where(AppState.key.like("last_success:%")))}
     latest = session.scalar(select(ForecastRecord).order_by(ForecastRecord.timestamp.desc()).limit(1))
     from app.db.models import CacheRecord
-    cache = session.scalar(select(CacheRecord).where(CacheRecord.source == "open_meteo").order_by(CacheRecord.fetched_at.desc()).limit(1))
+    cache_source = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
+    cache = session.scalar(select(CacheRecord).where(CacheRecord.source == cache_source).order_by(CacheRecord.fetched_at.desc()).limit(1))
     cache_time = cache.fetched_at.replace(tzinfo=timezone.utc) if cache and cache.fetched_at.tzinfo is None else (cache.fetched_at if cache else None)
-    source_success = session.get(AppState, "last_source_success:open_meteo")
+    source_success = session.get(AppState, f"last_source_success:{cache_source}")
     return {"status": "ok", "scheduler": "running" if scheduler.running else "stopped", "last_success": states, "data_mode": latest.source if latest else "ESTIMATED", "cache_age_seconds": max(0, (datetime.now(timezone.utc) - cache_time).total_seconds()) if cache_time else None, "cache_age_source": "CACHED" if cache_time else "ESTIMATED", "sources": {"open_meteo": source_success.value if source_success else None, "electricity_maps": "skipped unless configured; fallback active"}}
 
 

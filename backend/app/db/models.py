@@ -11,7 +11,7 @@ def now_utc() -> datetime:
 class CacheRecord(Base):
     __tablename__ = "cache_records"
     id: Mapped[int] = mapped_column(primary_key=True)
-    source: Mapped[str] = mapped_column(String(40), index=True)
+    source: Mapped[str] = mapped_column(String(120), index=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     payload: Mapped[str] = mapped_column(Text)
 

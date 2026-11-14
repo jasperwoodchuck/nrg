@@ -3,7 +3,7 @@ import logging
 import math
 import time
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from sqlalchemy import select
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.models import AppState, CacheRecord, ForecastRecord
 from app.forecast.model import estimate_intensity
+from app.modules.energy.location import weather_cache_key
 
 logger = logging.getLogger(__name__)
 URL = "https://api.open-meteo.com/v1/forecast"
@@ -28,7 +29,10 @@ def _validate_payload(payload: object) -> dict:
     times = hourly.get("time")
     if not isinstance(times, list) or not times:
         raise ValueError("Open-Meteo response contains no hourly timestamps")
-    local_zone = ZoneInfo(settings.timezone)
+    timezone_name = payload.get("timezone", settings.timezone)
+    if not isinstance(timezone_name, str):
+        raise ValueError("Open-Meteo response timezone must be a string")
+    local_zone = ZoneInfo(timezone_name)
     for value in times:
         if not isinstance(value, str):
             raise ValueError("Open-Meteo timestamp must be a string")
@@ -57,7 +61,7 @@ def cached_payload(session: Session, source: str) -> dict | None:
     for item in records:
         try:
             return _validate_payload(json.loads(item.payload))
-        except (ValueError, TypeError, json.JSONDecodeError):
+        except (ValueError, TypeError, json.JSONDecodeError, ZoneInfoNotFoundError):
             logger.warning("Ignoring malformed cached %s response", source)
     return None
 
@@ -105,19 +109,32 @@ def collect_weather(session: Session, client: httpx.Client | None = None) -> lis
     payload: dict | None = None
     try:
         payload = _request_payload(http_client)
+        response_timezone = payload.get("timezone")
+        if isinstance(response_timezone, str):
+            settings.timezone = response_timezone
+        cache_source = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
         fetched_at = datetime.now(timezone.utc)
-        session.add(CacheRecord(source="open_meteo", payload=json.dumps(payload, allow_nan=False), fetched_at=fetched_at))
-        success = session.get(AppState, "last_source_success:open_meteo")
+        session.add(CacheRecord(source=cache_source, payload=json.dumps(payload, allow_nan=False), fetched_at=fetched_at))
+        success = session.get(AppState, f"last_source_success:{cache_source}")
         if success is None:
-            success = AppState(key="last_source_success:open_meteo", value="")
+            success = AppState(key=f"last_source_success:{cache_source}", value="")
         success.value = fetched_at.isoformat()
         session.add(success)
-        session.commit()
         source = "LIVE"
+        mode_key = f"last_weather_mode:{cache_source}"
+        mode_state = session.get(AppState, mode_key) or AppState(key=mode_key, value="")
+        mode_state.value = source
+        session.add(mode_state)
+        session.commit()
     except Exception as exc:
         logger.warning("Weather collection failed; using cached data or model fallback: %s", exc)
         session.rollback()
-        payload = cached_payload(session, "open_meteo")
+        cache_source = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
+        payload = cached_payload(session, cache_source)
+        if payload is None and (settings.latitude, settings.longitude) == (22.57, 88.36):
+            payload = cached_payload(session, "open_meteo")
+        if payload is not None and isinstance(payload.get("timezone"), str):
+            settings.timezone = payload["timezone"]
         source = "CACHED" if payload is not None else "ESTIMATED"
     finally:
         if owns_client:
@@ -127,7 +144,10 @@ def collect_weather(session: Session, client: httpx.Client | None = None) -> lis
         payload = _fallback_payload()
     hourly = payload["hourly"]
     rows: list[ForecastRecord] = []
-    local_zone = ZoneInfo(settings.timezone)
+    timezone_name = payload.get("timezone", settings.timezone)
+    if not isinstance(timezone_name, str):
+        raise ValueError("Open-Meteo response timezone must be a string")
+    local_zone = ZoneInfo(timezone_name)
     for index, time_value in enumerate(hourly["time"]):
         at = datetime.fromisoformat(time_value)
         if at.tzinfo is None:
@@ -145,5 +165,11 @@ def collect_weather(session: Session, client: httpx.Client | None = None) -> lis
             row.source = intensity_source
             row.weather_json = json.dumps(weather, allow_nan=False)
         rows.append(row)
+    if source != "LIVE":
+        cache_source = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
+        mode_key = f"last_weather_mode:{cache_source}"
+        mode_state = session.get(AppState, mode_key) or AppState(key=mode_key, value="")
+        mode_state.value = source
+        session.add(mode_state)
     session.commit()
     return rows

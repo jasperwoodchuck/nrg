@@ -46,3 +46,6 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - (2026-11-14) Point Makefile API targets at the `/api/v1` application and forward the legacy `src.app` import to it, fixing frontend 404s from the old stub server.
+
+### Added
+- (2026-11-14) Add persistent GET/POST location endpoints; location changes isolate Open-Meteo cache, refresh forecasts, and reschedule pending loads.

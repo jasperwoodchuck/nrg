@@ -8,3 +8,5 @@
 - **Electricity Maps left for later:** The prompt allows this optional source to be cut. This build keeps the working Open-Meteo plus estimated fallback path and explicitly reports that Electricity Maps is skipped.
 - **Electricity Maps left for later:** The prompt allows this optional source to be cut. This build keeps the working Open-Meteo plus estimated fallback path and explicitly reports that Electricity Maps is skipped.
 - **Frontend API bridge:** The initial dashboard uses the existing GET endpoints directly, refreshes every 60 seconds, and reads its API base URL from `VITE_API_BASE_URL`. Backend CORS allows the configured `FRONTEND_ORIGIN` (default Vite dev origin).
+
+- **Runtime location selection:** Added the requested coordinate update endpoint so the dashboard can switch locations without restarting. The selection persists in existing `app_state`; forecasts are cleared and pending decisions are reopened after a change.

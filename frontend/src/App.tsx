@@ -7,6 +7,13 @@ type EndpointStatus = 'loading' | 'online' | 'error'
 type ViewState = { payload: unknown; status: EndpointStatus; error?: string }
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1').replace(/\/$/, '')
+const locations = [
+  { id: 'kolkata', name: 'Kolkata', latitude: 22.57, longitude: 88.36, timezone: 'Asia/Kolkata' },
+  { id: 'mumbai', name: 'Mumbai', latitude: 19.076, longitude: 72.8777, timezone: 'Asia/Kolkata' },
+  { id: 'new-delhi', name: 'New Delhi', latitude: 28.6139, longitude: 77.209, timezone: 'Asia/Kolkata' },
+  { id: 'bengaluru', name: 'Bengaluru', latitude: 12.9716, longitude: 77.5946, timezone: 'Asia/Kolkata' },
+  { id: 'chennai', name: 'Chennai', latitude: 13.0827, longitude: 80.2707, timezone: 'Asia/Kolkata' },
+] as const
 const endpoints = [
   { key: 'saved', path: '/impact/metrics/co2_saved', label: 'CO₂ saved' },
   { key: 'averageSaved', path: '/impact/metrics/co2_saved_baseline_b', label: 'Daily-average baseline' },
@@ -28,6 +35,20 @@ const initialState = Object.fromEntries(endpoints.map(({ key }) => [key, { paylo
 
 async function getJson(path: string): Promise<unknown> {
   const response = await fetch(`${API_BASE}${path}`, { headers: { Accept: 'application/json' } })
+  const body: unknown = await response.json().catch(() => null)
+  if (!response.ok) {
+    const error = isRecord(body) && isRecord(body.error) ? body.error : null
+    throw new Error(typeof error?.message === 'string' ? error.message : `Request failed (${response.status})`)
+  }
+  return body
+}
+
+async function postJson(path: string, payload: unknown): Promise<unknown> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
   const body: unknown = await response.json().catch(() => null)
   if (!response.ok) {
     const error = isRecord(body) && isRecord(body.error) ? body.error : null
@@ -70,6 +91,9 @@ function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour
 
 function App() {
   const [data, setData] = useState<DashboardState>(initialState)
+  const [selectedLocationId, setSelectedLocationId] = useState<string>('kolkata')
+  const [locationLoading, setLocationLoading] = useState(true)
+  const [locationError, setLocationError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -88,13 +112,53 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const initialTimer = window.setTimeout(() => void refresh(), 0)
+    const initialTimer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await getJson('/location')
+          if (isRecord(response) && isRecord(response.location)) {
+            const { latitude, longitude } = response.location
+            if (typeof latitude === 'number' && typeof longitude === 'number') {
+              const savedLocation = locations.find((location) =>
+                Math.abs(location.latitude - latitude) < 0.0001 && Math.abs(location.longitude - longitude) < 0.0001,
+              )
+              setSelectedLocationId(savedLocation?.id ?? 'custom')
+            }
+          }
+        } catch (error) {
+          setLocationError(error instanceof Error ? error.message : 'Could not load the saved location')
+        } finally {
+          setLocationLoading(false)
+          await refresh()
+        }
+      })()
+    }, 0)
     const timer = window.setInterval(() => void refresh(), 60_000)
     return () => {
       window.clearTimeout(initialTimer)
       window.clearInterval(timer)
     }
   }, [refresh])
+
+  const changeLocation = async (locationId: string) => {
+    const location = locations.find((option) => option.id === locationId)
+    if (!location) return
+    setLocationLoading(true)
+    setLocationError(null)
+    try {
+      await postJson('/location', {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        timezone: location.timezone,
+      })
+      setSelectedLocationId(location.id)
+      await refresh()
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : 'Could not update the location')
+    } finally {
+      setLocationLoading(false)
+    }
+  }
 
   const payload = (key: EndpointKey) => data[key]?.payload
   const forecastPayload = payload('forecast')
@@ -147,7 +211,14 @@ function App() {
           </div>
           <div className="hero-side">
             <div className="live-pill"><span className="live-pulse" /> SYSTEM {healthPayload && healthPayload.status === 'ok' ? 'ACTIVE' : 'CONNECTING'}</div>
-            <span className="hero-stamp">KOLKATA, IN <span>·</span> 22.57° N</span>
+            <label className="location-control">
+              <span className="location-label"><LocationIcon /> GRID LOCATION</span>
+              <select aria-label="Dashboard location" value={selectedLocationId} disabled={locationLoading} onChange={(event) => void changeLocation(event.target.value)}>
+                {selectedLocationId === 'custom' && <option value="custom" disabled>Current custom location</option>}
+                {locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+              </select>
+              {locationError && <span className="location-error" role="alert">{locationError}</span>}
+            </label>
           </div>
         </section>
 
@@ -289,5 +360,6 @@ function RefreshIcon() { return <svg viewBox="0 0 20 20" fill="none" aria-hidden
 function ReportIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 3h8l4 4v14H6V3Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" /><path d="M14 3v5h5M9 13h6M9 17h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg> }
 function DropIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3s6 7 6 11a6 6 0 1 1-12 0c0-4 6-11 6-11Z" stroke="currentColor" strokeWidth="1.6" /></svg> }
 function SnowIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M9 5l3 2 3-2M9 19l3-2 3 2M5 11l3-1 1-3M15 17l1-3 3-1M5 13l3 1 1 3m6-10 1 3 3 1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg> }
+function LocationIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z" stroke="currentColor" strokeWidth="1.6" /><circle cx="12" cy="10" r="2.2" stroke="currentColor" strokeWidth="1.6" /></svg> }
 
 export default App

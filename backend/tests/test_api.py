@@ -6,15 +6,19 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 from app.collectors.open_meteo import collect_weather
-from app.main import app, http_error_handler, validation_error_handler
+from app.main import app, http_error_handler, validation_error_handler, update_location, get_location
 from app.core.config import settings
+from app.db.models import ForecastRecord, VirtualLoad, AppState
+from app.modules.energy.location import LocationInput, LOCATION_STATE_KEY, restore_location
 from test_collector import MockClient, MockResponse, sample_payload
 
 
 def test_read_api_contracts_and_error_envelope(api_db_session):
     paths = (
+        "/api/v1/location",
         "/api/v1/impact/summary?range=24h",
         "/api/v1/impact/metrics/{key}",
         "/api/v1/forecast",
@@ -33,6 +37,7 @@ def test_read_api_contracts_and_error_envelope(api_db_session):
         if getattr(route, "methods", None) and "GET" in route.methods
     }
     calls = [
+        ("/api/v1/location", {"session": api_db_session}),
         ("/api/v1/impact/summary", {"range": "24h", "session": api_db_session}),
         *( ("/api/v1/impact/metrics/{key}", {"key": key, "range": "24h", "session": api_db_session}) for key in ("co2_saved", "co2_saved_baseline_b", "kwh_shifted", "loads_optimized") ),
         ("/api/v1/forecast", {"session": api_db_session}),
@@ -76,12 +81,12 @@ def test_open_meteo_data_flows_through_forecast_endpoint(api_db_session):
     assert "intensity_gco2_kwh" in body["forecast"][0]
 
 
-def test_simulator_control_is_the_only_write_route(api_db_session):
+def test_only_location_and_simulator_control_routes_write(api_db_session):
     from app.main import sim_control
     result = sim_control(action="stop", session=api_db_session)
     assert result["status"] == "stop"
     write_routes = {route.path for route in app.routes if getattr(route, "methods", None) and route.methods.intersection({"POST", "PUT", "PATCH", "DELETE"}) and route.path.startswith("/api/v1/")}
-    assert write_routes == {"/api/v1/sim/control"}
+    assert write_routes == {"/api/v1/location", "/api/v1/sim/control"}
 
 
 def test_legacy_asgi_import_reexports_current_api():
@@ -89,3 +94,56 @@ def test_legacy_asgi_import_reexports_current_api():
     from app.main import app as current_app
 
     assert legacy_app is current_app
+
+
+
+def test_location_change_persists_selection_and_rebuilds_forecasts(api_db_session, monkeypatch):
+    original = (settings.latitude, settings.longitude, settings.timezone)
+    monkeypatch.setattr(settings, "latitude", original[0])
+    monkeypatch.setattr(settings, "longitude", original[1])
+    monkeypatch.setattr(settings, "timezone", original[2])
+    now = datetime.now(timezone.utc)
+    old_forecast = ForecastRecord(timestamp=now + timedelta(hours=2), intensity=500, source="ESTIMATED", weather_json="{}")
+    load = VirtualLoad(
+        kind="ev_charging", household=1, energy_kwh=5, duration_hours=1,
+        created_at=now, baseline_at=now, deadline=now + timedelta(hours=5),
+        status="scheduled", chosen_start=now + timedelta(hours=1),
+        optimized_intensity=300, baseline_intensity=500, daily_average_intensity=450,
+    )
+    api_db_session.add_all([old_forecast, load])
+    api_db_session.commit()
+    old_forecast_id = old_forecast.id
+
+    def fake_collect(session):
+        refreshed = ForecastRecord(timestamp=now + timedelta(hours=3), intensity=420, source="ESTIMATED", weather_json="{}")
+        session.add(refreshed)
+        session.commit()
+        return [refreshed]
+
+    monkeypatch.setattr("app.main.collect_weather", fake_collect)
+    monkeypatch.setattr("app.main.optimize_pending", lambda session: None)
+    selected = LocationInput(latitude=19.0760, longitude=72.8777, timezone="Asia/Kolkata")
+
+    result = update_location(selected, api_db_session)
+
+    assert result["location"] == {"latitude": 19.076, "longitude": 72.8777, "timezone": "Asia/Kolkata"}
+    assert result["forecast_hours"] == 1
+    assert api_db_session.get(ForecastRecord, old_forecast_id) is None
+    api_db_session.refresh(load)
+    assert load.status == "pending" and load.chosen_start is None
+    state = api_db_session.get(AppState, LOCATION_STATE_KEY)
+    assert state is not None and "19.076" in state.value
+    assert get_location(api_db_session)["location"]["latitude"] == 19.076
+    settings.latitude, settings.longitude, settings.timezone = original
+    restore_location(api_db_session)
+    assert settings.latitude == 19.076 and settings.longitude == 72.8777
+
+
+
+def test_location_rejects_out_of_range_and_nonfinite_coordinates():
+    with pytest.raises(ValidationError):
+        LocationInput(latitude=91, longitude=0)
+    with pytest.raises(ValidationError):
+        LocationInput(latitude=float("nan"), longitude=0)
+    with pytest.raises(ValidationError):
+        LocationInput(latitude=0, longitude=0, timezone="Not/A_Timezone")
