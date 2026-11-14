@@ -200,8 +200,6 @@ td { font-size: 12px; }
 .waste-selected { color: #4b8a5b; }
 .waste-deferred { color: #b17c3e; }
 .environment-panel { min-width: 0; }
-.environment-panel > :not(.environment-glass) { position: relative; z-index: 1; }
-.environment-panel > .environment-glass { border-radius: inherit; }
 .environment-panel .panel-heading { position: relative; }
 .environment-panel .panel-heading h2 { font-size: 19px; }
 .monitor-refresh, .water-quality-panel .panel-heading select { min-height: 32px; border: 1px solid var(--line); border-radius: 6px; padding: 0 9px; background: var(--page-bg); color: var(--ink); font: 600 11px Manrope, sans-serif; }
@@ -390,3 +388,11 @@ td { font-size: 12px; }
   .scenario-summary > div > strong { font-size: 19px; }
   .scenario-summary .scenario-impact strong { font-size: 23px; }
 }
+
+.dashboard-tabs { display: flex; gap: 5px; margin: 0 0 18px; padding: 5px; overflow-x: auto; border: 1px solid var(--line); border-radius: 11px; background: color-mix(in srgb, var(--page-bg) 78%, transparent); }
+.dashboard-tab { flex: 1 0 auto; min-height: 42px; border: 0; border-radius: 7px; padding: 0 18px; background: transparent; color: var(--muted); font: 650 13px Manrope, sans-serif; cursor: pointer; transition: background .15s ease, color .15s ease, box-shadow .15s ease; }
+.dashboard-tab:hover { background: color-mix(in srgb, var(--green) 8%, transparent); color: var(--ink); }
+.dashboard-tab[aria-selected='true'] { background: var(--green); color: #fff; box-shadow: 0 2px 7px color-mix(in srgb, var(--green) 24%, transparent); }
+.dashboard-tab:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.dashboard-tab-panel[hidden] { display: none; }
+@media (max-width: 560px) { .dashboard-tabs { margin-inline: -2px; }.dashboard-tab { min-height: 40px; padding-inline: 14px; font-size: 12px; } }

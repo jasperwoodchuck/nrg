@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import Crosshair from './component/Crosshair.jsx'
 import LocationPicker, { type LocationPoint } from './component/LocationPicker'
 import Topography from './component/Topography.jsx'
-import GlassSurface from './component/GlassSurface.jsx'
 import './App.css'
 
 type Metric = { value: number; unit: string; source: string }
@@ -204,6 +203,7 @@ function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour
 
 function App() {
   const [showDashboard, setShowDashboard] = useState(false)
+  const [activeDashboardTab, setActiveDashboardTab] = useState<'overview' | 'power' | 'weather' | 'environment' | 'reports'>('overview')
   const [data, setData] = useState<DashboardState>(initialState)
   const [scenarioResult, setScenarioResult] = useState<ScenarioResult | null>(null)
   const [scenarioHouseholds, setScenarioHouseholds] = useState(30)
@@ -527,6 +527,27 @@ function App() {
           </div>
         </section>
 
+        <nav className="dashboard-tabs" role="tablist" aria-label="Dashboard sections">
+          {([
+            ['overview', 'Overview'],
+            ['power', 'Power'],
+            ['weather', 'Weather'],
+            ['environment', 'Environment'],
+            ['reports', 'Reports'],
+          ] as const).map(([tab, label]) => <button key={tab} id={`dashboard-tab-${tab}`} className="dashboard-tab" type="button" role="tab" aria-selected={activeDashboardTab === tab} aria-controls={`dashboard-panel-${tab}`} tabIndex={activeDashboardTab === tab ? 0 : -1} onClick={() => setActiveDashboardTab(tab)} onKeyDown={(event) => {
+            const tabs = ['overview', 'power', 'weather', 'environment', 'reports'] as const
+            const currentIndex = tabs.indexOf(tab)
+            const nextIndex = event.key === 'ArrowRight' ? (currentIndex + 1) % tabs.length : event.key === 'ArrowLeft' ? (currentIndex - 1 + tabs.length) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
+            if (nextIndex >= 0) {
+              event.preventDefault()
+              const nextTab = tabs[nextIndex]
+              setActiveDashboardTab(nextTab)
+              document.getElementById(`dashboard-tab-${nextTab}`)?.focus()
+            }
+          }}>{label}</button>)}
+        </nav>
+
+        <div id="dashboard-panel-overview" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-overview" hidden={activeDashboardTab !== 'overview'}>
         <section className="metric-grid" aria-label="Impact metrics">
           <MetricCard label="CO₂ AVOIDED" value={formatMetric(metricValue(payload('saved'))) } unit="gCO₂" note="vs typical-time baseline" tone="green" icon={<LeafIcon />} badge={sourceLabel} />
           <MetricCard label="LOADS OPTIMIZED" value={formatMetric(metricValue(payload('optimized')), 0)} unit="loads" note="flexible demand scheduled" tone="cream" icon={<GridIcon />} badge="SIMULATED" />
@@ -567,7 +588,9 @@ function App() {
             <p className="scenario-methodology">{scenarioResult.methodology} Forecast source: {scenarioResult.forecast_source}. Simulation only; no physical devices are controlled.</p>
           </div>}
         </section>
+        </div>
 
+        <div id="dashboard-panel-power" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-power" hidden={activeDashboardTab !== 'power'}>
         <section className="content-grid">
           <article className="panel forecast-panel">
               <div className="panel-heading">
@@ -608,6 +631,29 @@ function App() {
           </article>
         </section>
 
+        <section className="content-grid lower-grid">
+          <article className="panel schedule-panel">
+              <div className="panel-heading"><div><div className="section-kicker">AUTOMATED LOAD SHIFTING</div><h2>Schedule decisions</h2></div><span className="count-chip">{scheduleRows.length} decisions</span></div>
+            {scheduleRows.length ? <div className="table-wrap"><table><thead><tr><th>VIRTUAL LOAD</th><th>BASELINE TIME</th><th>CHOSEN WINDOW</th><th>CARBON SAVED</th></tr></thead><tbody>
+              {scheduleRows.slice(0, 6).map((item, index) => {
+                const window = isRecord(item.chosen_window) ? item.chosen_window : null
+                return <tr key={`${String(item.load_id)}-${index}`}><td><span className="device-icon"><DeviceIcon kind={asText(item.load)} /></span><span className="device-name">{formatKind(item.load)}</span><span className="status-dot" title={asText(item.status)} /></td><td>{formatTime(item.baseline_time)}</td><td><strong>{formatTime(window?.start)}</strong><span className="duration"> · {asNumber(window?.duration_hours)}h</span></td><td className="saving-cell">{asNumber(item.saving_g).toFixed(0)} g</td></tr>
+              })}
+            </tbody></table></div> : <EmptyState state={data.schedule} label="Schedule decisions" />}
+            <div className="panel-footnote"><span>↗</span> Energy use stays constant. Only the timing changes.</div>
+          </article>
+
+          <article className="panel fleet-panel">
+              <div className="panel-heading"><div><div className="section-kicker">SIMULATED HOUSEHOLDS</div><h2>Flexible fleet</h2></div><span className="count-chip">{loadRows.length} devices</span></div>
+            {loadRows.length ? <div className="fleet-list">{loadRows.slice(0, 7).map((item, index) => <div className="fleet-row" key={`${String(item.id)}-${index}`}>
+              <span className="device-icon fleet-device"><DeviceIcon kind={asText(item.kind)} /></span><div className="fleet-main"><strong>{formatKind(item.kind)}</strong><span>Home {asNumber(item.household)}</span></div><div className="fleet-meta"><strong>{asNumber(item.energy_kwh).toFixed(1)} <small>kWh</small></strong><span className={`tag tag-${asText(item.status, 'pending').toLowerCase()}`}>{asText(item.status, 'pending')}</span></div>
+            </div>)}</div> : <EmptyState state={data.loads} label="Virtual fleet" />}
+            <div className="fleet-foot"><span className="fleet-dot" /> All devices are virtual · no hardware connected</div>
+          </article>
+        </section>
+        </div>
+
+        <div id="dashboard-panel-weather" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-weather" hidden={activeDashboardTab !== 'weather'}>
         <section className="weather-panel panel" aria-labelledby="weather-heading">
           <div className="panel-heading">
             <div><div className="section-kicker">OPEN-METEO WEATHER</div><h2 id="weather-heading">Conditions by time scale</h2></div>
@@ -625,10 +671,11 @@ function App() {
           </tbody></table></div> : <EmptyState state={weatherView} label="Open-Meteo weather" />}
           <div className="weather-meta">{weatherPayload?.fetched_at ? `Fetched ${formatTime(weatherPayload.fetched_at, { hour: 'numeric', minute: '2-digit' })}` : 'Waiting for weather data'} · powered by Open-Meteo</div>
         </section>
+        </div>
 
+        <div id="dashboard-panel-environment" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-environment" hidden={activeDashboardTab !== 'environment'}>
         <section className="environment-grid" aria-label="Environmental monitoring">
           <article className="panel environment-panel air-quality-panel">
-            <GlassSurface className="environment-glass" width="100%" height="100%" backgroundOpacity={0.16} displace={0.15} style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }} />
             <div className="panel-heading"><div><div className="section-kicker">MODELED AIR QUALITY</div><h2>Air quality outlook</h2></div><button className="monitor-refresh" type="button" onClick={() => void refreshEnvironmentalData()} disabled={environmentRefreshing}>{environmentRefreshing ? 'Updating…' : 'Refresh'}</button></div>
             {airQualityPayload && airCurrent ? <>
               <div className="air-current-grid">
@@ -643,7 +690,6 @@ function App() {
           </article>
 
           <article className="panel environment-panel water-quality-panel">
-            <GlassSurface className="environment-glass" width="100%" height="100%" backgroundOpacity={0.16} displace={0.15} style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }} />
             <div className="panel-heading"><div><div className="section-kicker">CPCB SURFACE WATER</div><h2>Nearby sampling stations</h2></div><select aria-label="Water quality region" value={waterRegion} onChange={(event) => setWaterRegion(event.target.value)} disabled={!waterRegions.length || environmentRefreshing}>{(waterRegions.length ? waterRegions : ['West Bengal']).map((region) => <option key={region} value={region}>{region}</option>)}</select></div>
             <p className="water-data-note">Historical manual samples in {asText(waterQualityPayload?.region, waterRegion)} · within {asNumber(waterQualityPayload?.radius_km, 100)} km</p>
             {waterStations.length ? <div className="water-station-list">{waterStations.slice(0, 5).map((station, index) => {
@@ -674,28 +720,9 @@ function App() {
             </> : <EmptyState state={data.wastePlan} label="Waste collection plan" />}
           </article>
         </section>
+        </div>
 
-        <section className="content-grid lower-grid">
-          <article className="panel schedule-panel">
-              <div className="panel-heading"><div><div className="section-kicker">AUTOMATED LOAD SHIFTING</div><h2>Schedule decisions</h2></div><span className="count-chip">{scheduleRows.length} decisions</span></div>
-            {scheduleRows.length ? <div className="table-wrap"><table><thead><tr><th>VIRTUAL LOAD</th><th>BASELINE TIME</th><th>CHOSEN WINDOW</th><th>CARBON SAVED</th></tr></thead><tbody>
-              {scheduleRows.slice(0, 6).map((item, index) => {
-                const window = isRecord(item.chosen_window) ? item.chosen_window : null
-                return <tr key={`${String(item.load_id)}-${index}`}><td><span className="device-icon"><DeviceIcon kind={asText(item.load)} /></span><span className="device-name">{formatKind(item.load)}</span><span className="status-dot" title={asText(item.status)} /></td><td>{formatTime(item.baseline_time)}</td><td><strong>{formatTime(window?.start)}</strong><span className="duration"> · {asNumber(window?.duration_hours)}h</span></td><td className="saving-cell">{asNumber(item.saving_g).toFixed(0)} g</td></tr>
-              })}
-            </tbody></table></div> : <EmptyState state={data.schedule} label="Schedule decisions" />}
-            <div className="panel-footnote"><span>↗</span> Energy use stays constant. Only the timing changes.</div>
-          </article>
-
-          <article className="panel fleet-panel">
-              <div className="panel-heading"><div><div className="section-kicker">SIMULATED HOUSEHOLDS</div><h2>Flexible fleet</h2></div><span className="count-chip">{loadRows.length} devices</span></div>
-            {loadRows.length ? <div className="fleet-list">{loadRows.slice(0, 7).map((item, index) => <div className="fleet-row" key={`${String(item.id)}-${index}`}>
-              <span className="device-icon fleet-device"><DeviceIcon kind={asText(item.kind)} /></span><div className="fleet-main"><strong>{formatKind(item.kind)}</strong><span>Home {asNumber(item.household)}</span></div><div className="fleet-meta"><strong>{asNumber(item.energy_kwh).toFixed(1)} <small>kWh</small></strong><span className={`tag tag-${asText(item.status, 'pending').toLowerCase()}`}>{asText(item.status, 'pending')}</span></div>
-            </div>)}</div> : <EmptyState state={data.loads} label="Virtual fleet" />}
-            <div className="fleet-foot"><span className="fleet-dot" /> All devices are virtual · no hardware connected</div>
-          </article>
-        </section>
-
+        <div id="dashboard-panel-reports" className="dashboard-tab-panel" role="tabpanel" aria-labelledby="dashboard-tab-reports" hidden={activeDashboardTab !== 'reports'}>
         <section className="content-grid report-grid">
           <article className="panel report-panel">
               <div className="panel-heading"><div><div className="section-kicker">DAILY AUTOGENERATED BRIEF</div><h2>Latest report</h2></div><span className="report-mark"><ReportIcon /></span></div>
