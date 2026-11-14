@@ -4,7 +4,7 @@ dev:
 	@echo "Starting frontend and backend..."
 	@trap 'kill 0' INT; \
 	(cd frontend && bun run dev) & \
-	(cd backend && uv run uvicorn src.app:app --reload) & \
+	(cd backend && uv run uvicorn app.main:app --reload) & \
 	wait
 
 frontend:
@@ -14,10 +14,10 @@ frontend-build:
 	cd frontend && bun run build
 
 backend:
-	cd backend && uv run uvicorn src.app:app --reload
+	cd backend && uv run uvicorn app.main:app --reload
 
 backend-run:
-	cd backend && uv run uvicorn src.app:app
+	cd backend && uv run uvicorn app.main:app
 
 install:
 	cd frontend && bun install
@@ -27,7 +27,6 @@ lint:
 	cd frontend && bun run lint
 	cd backend && uv run ruff check .
 
-# Format
 format:
 	cd frontend && bun run format
 	cd backend && uv run ruff format .

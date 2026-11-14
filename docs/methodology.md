@@ -2,7 +2,7 @@
 
 ## Data and source badges
 
-- **Open-Meteo**: hourly temperature, cloud cover, 80 m wind speed, shortwave radiation, and precipitation for the configured latitude/longitude and timezone (`forecast_days=3`). Weather responses are cached in SQLite. A fresh response is `LIVE`; a reused response is `CACHED`.
+- **Open-Meteo**: hourly temperature, cloud cover, 80 m wind speed, shortwave radiation, and precipitation for the configured latitude/longitude and timezone (`forecast_days=3`). The collector explicitly requests `wind_speed_unit=ms` because the fallback model normalizes wind in m/s. Weather responses are cached in SQLite. A fresh response is `LIVE`; a reused response is `CACHED`.
 - **Carbon intensity**: currently derived from the configured fallback model. These intensity values are `ESTIMATED` (or `CACHED` when computed from cached weather). Electricity Maps is not currently integrated; the optional API key is reserved and the fallback remains active.
 - **Loads and schedules**: all fleet devices, decisions, and outcomes are virtual and labeled `SIMULATED`.
 - **Impact metrics**: calculated from simulated load records and estimated intensity inputs; metrics include their `source`, formula ID, inputs, factor-set version, and computation time.

@@ -37,3 +37,12 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - (2026-11-14) Rename the product and API project from TerraPulse to NRG.
+
+### Fixed
+- (2026-11-14) Request Open-Meteo wind speed in m/s to match fallback model coefficients; malformed live or cached payloads now recover through valid cache or deterministic forecast fallback.
+
+### Added
+- (2026-11-14) Add isolated collector/cache/fallback tests and route-level API contract tests, including Open-Meteo forecast flow.
+
+### Fixed
+- (2026-11-14) Point Makefile API targets at the `/api/v1` application and forward the legacy `src.app` import to it, fixing frontend 404s from the old stub server.

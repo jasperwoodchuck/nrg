@@ -18,7 +18,7 @@ def optimize_pending(session: Session) -> None:
         return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
     for load in pending:
         earliest = max(now, utc(load.created_at))
-        choice = choose_window(forecasts, earliest, load.deadline, load.duration_hours)
+        choice = choose_window(forecasts, earliest, utc(load.deadline), load.duration_hours)
         if choice is None:
             continue
         start, intensity = choice

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import GlassSurface from './component/GlassSurface.jsx'
 import './App.css'
 
 type Metric = { value: number; unit: string; source: string }
@@ -119,6 +120,7 @@ function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
+        <GlassSurface className="topbar-glass" width="100%" height="100%" borderRadius={0} backgroundOpacity={0.12} displace={0.35}>
         <a className="brand" href="#top" aria-label="NRG home">
           <span className="brand-mark"><PulseIcon /></span>
           <span>NRG</span>
@@ -133,6 +135,7 @@ function App() {
           </button>
           <span className="avatar">TP</span>
         </div>
+        </GlassSurface>
       </header>
 
       <div className="page-content" id="top">

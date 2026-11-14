@@ -1,15 +1,5 @@
-from fastapi import FastAPI
+"""Compatibility import for older `uvicorn src.app:app` launch commands."""
 
-app = FastAPI(
-    title="Hackathon API",
-)
+from app.main import app
 
-
-@app.get("/")
-async def root():
-    return {"message": "API is running"}
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+__all__ = ["app"]
