@@ -324,6 +324,9 @@ function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => window.localStorage.getItem('nrg-theme') === 'dark')
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [aiInsight, setAiInsight] = useState<string | null>(null)
+  const [aiInsightLoading, setAiInsightLoading] = useState(false)
+  const [aiInsightError, setAiInsightError] = useState<string | null>(null)
 
   useEffect(() => {
     window.localStorage.setItem('nrg-language', language)
@@ -394,6 +397,22 @@ function App() {
       setScenarioError(error instanceof Error ? error.message : 'Could not run the optimization scenario')
     } finally {
       setScenarioLoading(false)
+    }
+  }
+
+  const generateAiInsight = async () => {
+    setAiInsightLoading(true)
+    setAiInsightError(null)
+    try {
+      const result = await postJson('/insights/ai', {})
+      if (!isRecord(result) || typeof result.insight !== 'string' || !result.insight.trim()) {
+        throw new Error('The AI service returned an invalid insight.')
+      }
+      setAiInsight(result.insight)
+    } catch (error) {
+      setAiInsightError(error instanceof Error ? error.message : 'Could not generate an AI insight.')
+    } finally {
+      setAiInsightLoading(false)
     }
   }
 
@@ -812,6 +831,17 @@ function App() {
             {insightRows.length ? <div className="insight-list">
               {insightRows.map((item, index) => <InsightItem key={`${String(item.type)}-${index}`} item={item} language={language} timeZone={locationTimezone} />)}
             </div> : <EmptyState language={language} state={data.insights} label={tx('Insights')} />}
+            <div className="ai-insight">
+              <div className="ai-insight-heading">
+                <span>{tx('AI GRID INSIGHT')}</span>
+                <button className="refresh-button" type="button" onClick={() => void generateAiInsight()} disabled={aiInsightLoading}>
+                  {aiInsightLoading ? tx('Generating…') : aiInsight ? tx('Regenerate') : tx('Generate insight')}
+                </button>
+              </div>
+              {aiInsightError && <p className="ai-insight-error" role="alert">{aiInsightError}</p>}
+              {aiInsight && <p className="ai-insight-copy" aria-live="polite">{aiInsight}</p>}
+              <span className="ai-insight-note">{tx('AI-generated from simulated loads and forecast data.')}</span>
+            </div>
             <div className="health-strip">
               <span className="health-icon"><PulseIcon /></span>
               <div><strong>{tx('Pipeline health')}</strong><span>{healthPayload?.scheduler === 'running' ? 'Scheduler running' : asText(healthPayload?.status, 'Waiting for API')}</span></div>

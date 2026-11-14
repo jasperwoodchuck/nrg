@@ -1,7 +1,7 @@
 import json
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
@@ -18,6 +18,12 @@ from app.db.database import initialize_database, get_session, SessionLocal
 from app.db.models import AppState, CacheRecord, ForecastRecord, Report, ScenarioRun, VirtualLoad
 from app.modules.impact.service import completed_rows, metric, range_start
 from app.modules.impact.engine import summarize
+from app.modules.ai.insights import (
+    GEMINI_MODEL,
+    GeminiInsightError,
+    GeminiKeyMissingError,
+    generate_grid_insight,
+)
 from app.modules.impact.mobility import estimate_weekly_mobility
 from app.modules.environment.monitoring import get_air_quality, get_water_quality, water_quality_regions
 from app.modules.environment.waste import build_collection_plan
@@ -36,6 +42,7 @@ from app.optimizer.scenario import run_scenario
 from app.scheduler import jobs
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 scheduler = BackgroundScheduler(timezone="UTC")
 
 
@@ -408,6 +415,39 @@ def insights(session: Session = Depends(get_session)):
     cleanest = min(tomorrow, key=lambda row: row.intensity, default=None)
     spike = max(forecasts, key=lambda row: row.intensity, default=None)
     return {"source": "SIMULATED", "insights": [{"type": "biggest_saving", "load_id": biggest.id if biggest else None, "saving_g": round(biggest.energy_kwh * ((biggest.baseline_intensity or 0) - (biggest.optimized_intensity or 0)), 2) if biggest else 0}, {"type": "cleanest_window_tomorrow", "timestamp": cleanest.timestamp.isoformat() if cleanest else None, "intensity_gco2_kwh": cleanest.intensity if cleanest else None}, {"type": "highest_intensity_forecast", "timestamp": spike.timestamp.isoformat() if spike else None, "intensity_gco2_kwh": spike.intensity if spike else None}]}
+
+
+@app.post("/api/v1/insights/ai")
+def ai_insight(session: Session = Depends(get_session)):
+    now = datetime.now(timezone.utc)
+    end = now + timedelta(hours=24)
+    forecast_rows = list(session.scalars(select(ForecastRecord).order_by(ForecastRecord.timestamp)))
+    upcoming = []
+    for row in forecast_rows:
+        timestamp = row.timestamp if row.timestamp.tzinfo else row.timestamp.replace(tzinfo=timezone.utc)
+        if now <= timestamp <= end:
+            upcoming.append(row)
+
+    impact = summarize(completed_rows(session))
+    facts: dict[str, int | float | str | None] = {
+        "completed_simulated_loads": impact["loads_optimized"],
+        "energy_shifted_kwh": round(impact["kwh_shifted"], 2),
+        "estimated_co2_avoided_kg": round(impact["saved_a_g"] / 1000, 3),
+        "forecast_hours_next_24h": len(upcoming),
+        "forecast_intensity_min_gco2_kwh": round(min((row.intensity for row in upcoming), default=0), 1) if upcoming else None,
+        "forecast_intensity_max_gco2_kwh": round(max((row.intensity for row in upcoming), default=0), 1) if upcoming else None,
+        "forecast_data_sources": ", ".join(sorted({row.source for row in upcoming})) or None,
+    }
+
+    try:
+        text = generate_grid_insight(facts)
+    except GeminiKeyMissingError as error:
+        raise HTTPException(503, "AI insights are not configured. Set GEMINI_API_KEY on the backend.") from error
+    except GeminiInsightError as error:
+        logger.warning("Gemini insight generation failed (%s)", type(error).__name__)
+        raise HTTPException(502, "Gemini could not generate an insight. Try again later.") from error
+
+    return {"source": "GEMINI", "model": GEMINI_MODEL, "generated_at": now.isoformat(), "insight": text, "facts": facts}
 
 
 @app.get("/api/v1/reports/latest")

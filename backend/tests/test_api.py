@@ -130,6 +130,7 @@ def test_expected_write_routes_are_registered(api_db_session):
         "/api/v1/sim/control",
         "/api/v1/scenario/run",
         "/api/v1/mobility/estimate",
+        "/api/v1/insights/ai",
     }
 
 

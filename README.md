@@ -24,6 +24,12 @@ The backend can connect to Supabase Postgres through SQLAlchemy. For Render, cop
 
 The project includes Psycopg 3 and adapts `postgresql://` connection URIs for SQLAlchemy. Keep this URI private in the backend environment; the browser only talks to the API and must never receive database credentials. No Supabase frontend key, Auth, or Data API setup is needed for this database connection.
 
+## Gemini AI grid insight
+
+The Grid Insights panel has a **Generate insight** action that sends aggregated simulated-load and 24-hour forecast metrics to Gemini 3.8 Flash. It only calls Gemini when requested; the existing deterministic insights remain available without a key. The backend checks the response for usable text and returns a clear error if the key is missing or Gemini is unavailable. The API key stays on the backend.
+
+For local development, add your key to `backend/.env` as `GEMINI_API_KEY=...` (the file is ignored by Git). For Render, add `GEMINI_API_KEY` to the backend Web Service's Environment settings; do not add it to Vercel or any `VITE_*` variable. Create a key in [Google AI Studio](https://aistudio.google.com/app/apikey). The request uses the official Gemini `generateContent` API and the stable `gemini-3.8-flash` model.
+
 On first backend startup, SQLAlchemy creates the tables defined in `backend/app/db/models.py`. The project does not currently include a migration tool: `create_all` creates missing tables but does not update existing tables when models change. Existing local SQLite data is not copied into Supabase automatically. Keep the API on a persistent backend service because it runs a background scheduler; Vercel hosts the frontend separately. Run one API process for now because each process starts its own scheduler.
 
 ## Deploy the frontend to Vercel

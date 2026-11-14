@@ -1,6 +1,6 @@
 # API (v1)
 
-Routes are read-only JSON except the location selector and demo operator control endpoints. OpenAPI is available at `/docs`. Errors use `{ "error": { "code": "request_error", "message": "...", "details": {} } }`.
+Routes are read-only JSON except the location selector, AI insight generation, and demo operator control endpoints. OpenAPI is available at `/docs`. Errors use `{ "error": { "code": "request_error", "message": "...", "details": {} } }`.
 
 - `GET /api/v1/impact/summary?range=24h|7d|30d`: headline CO2, percent vs both baselines, completed load count, shifted kWh, and methodology.
 - `GET /api/v1/impact/metrics/{key}?range=...`: `co2_saved`, `co2_saved_baseline_b`, `kwh_shifted`, or `loads_optimized`; each includes `value`, `unit`, `inputs`, `factor_set_version`, `source`, `formula_id`, and `computed_at`.
@@ -16,6 +16,7 @@ Routes are read-only JSON except the location selector and demo operator control
 - `GET /api/v1/schedule`: simulated load decisions, baseline, selected window, savings, and reason.
 - `GET /api/v1/loads`: virtual fleet and status.
 - `GET /api/v1/insights`: biggest saving, cleanest forecast hour tomorrow, and highest forecast intensity.
+- `POST /api/v1/insights/ai` with `{}`: generates a short Gemini insight from aggregate simulated fleet outcomes and the next 24 hours of forecast data. Requires backend-only `GEMINI_API_KEY`; returns 503 if it is not configured and 502 if Gemini returns an error or unusable output. It does not control devices or treat simulated outcomes as metered readings.
 - `GET /api/v1/reports/latest` and `GET /api/v1/reports`: generated report(s).
 - `GET /api/v1/health`: scheduler state, last successful job timestamps, data mode, and cache age.
 - `GET /api/v1/location`: current latitude, longitude, timezone, and weather source.
