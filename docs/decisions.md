@@ -10,3 +10,4 @@
 - **Frontend API bridge:** The initial dashboard uses the existing GET endpoints directly, refreshes every 60 seconds, and reads its API base URL from `VITE_API_BASE_URL`. Backend CORS allows the configured `FRONTEND_ORIGIN` (default Vite dev origin).
 
 - **Runtime location selection:** Added the requested coordinate update endpoint so the dashboard can switch locations without restarting. The selection persists in existing `app_state`; forecasts are cleared and pending decisions are reopened after a change.
+- **Map location picker:** Zoom Earth's page sends `X-Frame-Options: SAMEORIGIN`, so it cannot be embedded as an interactive picker or report clicks back to NRG. The dashboard uses an OpenStreetMap-backed Leaflet map, supports importing coordinates from a Zoom Earth map URL, and provides a Zoom Earth deep link centered on the selected point. When applied, Open-Meteo resolves the timezone from coordinates.

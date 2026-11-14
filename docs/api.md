@@ -12,7 +12,7 @@ Routes are read-only JSON except the location selector and demo operator control
 - `GET /api/v1/reports/latest` and `GET /api/v1/reports`: generated report(s).
 - `GET /api/v1/health`: scheduler state, last successful job timestamps, data mode, and cache age.
 - `GET /api/v1/location`: current latitude, longitude, timezone, and weather source.
-- `POST /api/v1/location`: update location with `{ "latitude": 19.0760, "longitude": 72.8777, "timezone": "Asia/Kolkata" }`. Timezone is optional and must be an IANA timezone when provided. The backend persists this selection, isolates weather cache by location, replaces old forecasts, and reschedules pending loads. It returns the selected location, weather source badge, intensity source badge, and forecast row count.
+- `POST /api/v1/location`: update location with `{ "latitude": 19.0760, "longitude": 72.8777, "timezone": "Asia/Kolkata" }`. If `timezone` is omitted, the collector asks Open-Meteo for `timezone=auto` at the selected coordinates and saves the returned IANA zone. The backend persists this selection, isolates weather cache by location, replaces old forecasts, and reschedules pending loads. It returns the selected location, weather and timezone source badges, intensity source badge, and forecast row count.
 
 Example location response:
 

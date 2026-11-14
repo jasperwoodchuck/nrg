@@ -89,7 +89,7 @@ def _fallback_payload() -> dict:
     }
 
 
-def _request_payload(client: httpx.Client) -> dict:
+def _request_payload(client: httpx.Client, timezone_auto: bool = False) -> dict:
     params = {
         "latitude": settings.latitude,
         "longitude": settings.longitude,
@@ -99,7 +99,7 @@ def _request_payload(client: httpx.Client) -> dict:
         "daily": DAILY_VARS,
         "forecast_minutely_15": 96,
         "forecast_days": 3,
-        "timezone": settings.timezone,
+        "timezone": "auto" if timezone_auto else settings.timezone,
         "wind_speed_unit": "ms",
     }
     last_error: Exception | None = None
@@ -115,12 +115,12 @@ def _request_payload(client: httpx.Client) -> dict:
     raise last_error or RuntimeError("Open-Meteo is unavailable")
 
 
-def collect_weather(session: Session, client: httpx.Client | None = None) -> list[ForecastRecord]:
+def collect_weather(session: Session, client: httpx.Client | None = None, timezone_auto: bool = False) -> list[ForecastRecord]:
     owns_client = client is None
     http_client = client or httpx.Client(timeout=3.0)
     payload: dict | None = None
     try:
-        payload = _request_payload(http_client)
+        payload = _request_payload(http_client, timezone_auto=timezone_auto)
         response_timezone = payload.get("timezone")
         if isinstance(response_timezone, str):
             settings.timezone = response_timezone
@@ -143,6 +143,18 @@ def collect_weather(session: Session, client: httpx.Client | None = None) -> lis
         session.rollback()
         cache_source = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
         payload = cached_payload(session, cache_source)
+        if payload is None and timezone_auto:
+            coordinate_prefix = f"open_meteo:{settings.latitude:.6f}:{settings.longitude:.6f}:"
+            cached_sources = session.scalars(
+                select(CacheRecord.source)
+                .where(CacheRecord.source.like(f"{coordinate_prefix}%"))
+                .order_by(CacheRecord.fetched_at.desc())
+                .limit(10)
+            )
+            for cached_source in cached_sources:
+                payload = cached_payload(session, cached_source)
+                if payload is not None:
+                    break
         if payload is None and (settings.latitude, settings.longitude) == (22.57, 88.36):
             payload = cached_payload(session, "open_meteo")
         if payload is not None and isinstance(payload.get("timezone"), str):

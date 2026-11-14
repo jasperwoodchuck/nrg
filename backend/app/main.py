@@ -66,24 +66,22 @@ async def validation_error_handler(request, exc: RequestValidationError):
 def get_location(session: Session = Depends(get_session)):
     cache_source = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
     mode = session.get(AppState, f"last_weather_mode:{cache_source}")
-    return {"location": current_location(), "weather_source": mode.value if mode else "ESTIMATED"}
+    source = mode.value if mode else "ESTIMATED"
+    return {"location": current_location(), "weather_source": source, "timezone_source": source}
 
 
 @app.post("/api/v1/location")
 def update_location(location: LocationInput, session: Session = Depends(get_session)):
-    timezone_name = location.timezone or settings.timezone
-    changed = (location.latitude, location.longitude, timezone_name) != (
-        settings.latitude,
-        settings.longitude,
-        settings.timezone,
-    )
+    coordinates_changed = (location.latitude, location.longitude) != (settings.latitude, settings.longitude)
+    timezone_changed = location.timezone is not None and location.timezone != settings.timezone
+    changed = coordinates_changed or timezone_changed
     if not changed:
         return get_location(session)
 
     settings.latitude = location.latitude
     settings.longitude = location.longitude
-    settings.timezone = timezone_name
-    persist_location(session)
+    if location.timezone is not None:
+        settings.timezone = location.timezone
     session.execute(delete(ForecastRecord))
     session.execute(
         update(VirtualLoad)
@@ -98,13 +96,19 @@ def update_location(location: LocationInput, session: Session = Depends(get_sess
     )
     session.commit()
 
-    forecast_rows = collect_weather(session)
+    if location.timezone is None:
+        forecast_rows = collect_weather(session, timezone_auto=True)
+    else:
+        forecast_rows = collect_weather(session)
+    persist_location(session)
+    session.commit()
     optimize_pending(session)
     cache_source = weather_cache_key(settings.latitude, settings.longitude, settings.timezone)
     mode = session.get(AppState, f"last_weather_mode:{cache_source}")
     return {
         "location": current_location(),
         "weather_source": mode.value if mode else "ESTIMATED",
+        "timezone_source": mode.value if mode else "ESTIMATED",
         "intensity_source": forecast_rows[0].source if forecast_rows else "ESTIMATED",
         "forecast_hours": len(forecast_rows),
     }

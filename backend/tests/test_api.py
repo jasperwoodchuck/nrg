@@ -178,6 +178,40 @@ def test_location_change_persists_selection_and_rebuilds_forecasts(api_db_sessio
     assert settings.latitude == 19.076 and settings.longitude == 72.8777
 
 
+def test_map_location_without_timezone_asks_collector_to_resolve_it(api_db_session, monkeypatch):
+    original = (settings.latitude, settings.longitude, settings.timezone)
+    monkeypatch.setattr(settings, "latitude", original[0])
+    monkeypatch.setattr(settings, "longitude", original[1])
+    monkeypatch.setattr(settings, "timezone", original[2])
+    api_db_session.query(ForecastRecord).delete()
+    existing_location = api_db_session.get(AppState, LOCATION_STATE_KEY)
+    if existing_location:
+        api_db_session.delete(existing_location)
+    api_db_session.commit()
+    now = datetime.now(timezone.utc)
+
+    def fake_collect(session, timezone_auto=False):
+        assert timezone_auto is True
+        settings.timezone = "Asia/Tokyo"
+        row = ForecastRecord(timestamp=now + timedelta(hours=1), intensity=400, source="ESTIMATED", weather_json="{}")
+        session.add(row)
+        session.commit()
+        return [row]
+
+    monkeypatch.setattr("app.main.collect_weather", fake_collect)
+    monkeypatch.setattr("app.main.optimize_pending", lambda session: None)
+
+    result = update_location(LocationInput(latitude=35.68, longitude=139.69), api_db_session)
+
+    assert result["location"]["timezone"] == "Asia/Tokyo"
+    assert result["timezone_source"] == "ESTIMATED"
+    persisted = api_db_session.get(AppState, LOCATION_STATE_KEY)
+    assert persisted is not None and "Asia/Tokyo" in persisted.value
+    api_db_session.delete(persisted)
+    api_db_session.query(ForecastRecord).delete()
+    api_db_session.commit()
+
+
 
 def test_location_rejects_out_of_range_and_nonfinite_coordinates():
     with pytest.raises(ValidationError):

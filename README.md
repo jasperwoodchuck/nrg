@@ -16,7 +16,7 @@ The API creates its SQLite database and seeds demo history on startup. OpenAPI i
 
 ## Configuration
 
-Copy `backend/.env.example` to `backend/.env` (or export variables in the process environment). Set the frontend API URL in `frontend/.env` using `frontend/.env.example`. Set `FRONTEND_ORIGIN` in the backend environment to the browser origin if it differs from `http://localhost:5173`. Defaults target Kolkata, India. `DATABASE_URL` defaults to a local SQLite file. The India grid anchor and fallback model coefficients can be adjusted using the documented variables. `ELECTRICITY_MAPS_API_KEY` is reserved for optional integration; this MVP currently relies on the fallback intensity model.
+Copy `backend/.env.example` to `backend/.env` (or export variables in the process environment). Set the frontend API URL in `frontend/.env` using `frontend/.env.example`. Set `FRONTEND_ORIGIN` in the backend environment to the browser origin if it differs from `http://localhost:5173`. Defaults target Kolkata, India. The location selector includes cities across all Indian states and union territories; the map picker accepts any coordinates and asks Open-Meteo to resolve their IANA timezone. You can import coordinates by pasting a Zoom Earth map URL or open the selected point in Zoom Earth. `DATABASE_URL` defaults to a local SQLite file. The India grid anchor and fallback model coefficients can be adjusted using the documented variables. `ELECTRICITY_MAPS_API_KEY` is reserved for optional integration; this MVP currently relies on the fallback intensity model.
 
 ## Demo
 

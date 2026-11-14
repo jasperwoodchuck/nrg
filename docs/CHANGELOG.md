@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-11-14
 
+### Changed
+- (2026-11-14) Make map-based location and timezone selection the startup screen; load the dashboard after the location is saved.
+
+### Added
+- (2026-11-14) Add a click-to-select map, Zoom Earth URL coordinate import, and Open-Meteo timezone auto-resolution.
+
+### Changed
+- (2026-11-14) Expand the dashboard location selector to cover Indian states and union territories, keeping all locations on `Asia/Kolkata`.
+
 ### Added
 - (2026-11-14) Add Open-Meteo current/15-minute, hourly, and daily weather modes through `GET /api/v1/weather`, with dashboard resolution tabs and mode contract tests.
 

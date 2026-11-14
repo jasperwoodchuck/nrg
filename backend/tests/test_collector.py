@@ -100,6 +100,19 @@ def test_live_hourly_local_time_is_normalized_to_utc(db_session):
     assert rows[0].timestamp.replace(tzinfo=timezone.utc) == local.astimezone(timezone.utc)
 
 
+def test_auto_timezone_is_forwarded_to_open_meteo_and_saved_from_response(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "timezone", "Asia/Kolkata")
+    payload = sample_payload(["2026-01-01T12:00"])
+    payload["timezone"] = "Asia/Tokyo"
+    client = MockClient([MockResponse(payload)])
+
+    rows = collect_weather(db_session, client, timezone_auto=True)
+
+    assert client.calls[0][1]["timezone"] == "auto"
+    assert settings.timezone == "Asia/Tokyo"
+    assert rows
+
+
 def test_timeout_uses_latest_valid_cached_response_without_raising(db_session, monkeypatch):
     monkeypatch.setattr(open_meteo.time, "sleep", lambda seconds: None)
     cached = sample_payload(["2026-01-01T12:00"])

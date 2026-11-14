@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import GlassSurface from './component/GlassSurface.jsx'
+import LocationPicker, { type LocationPoint } from './component/LocationPicker'
 import Topography from './component/Topography.jsx'
 import './App.css'
 
@@ -8,13 +9,44 @@ type EndpointStatus = 'loading' | 'online' | 'error'
 type ViewState = { payload: unknown; status: EndpointStatus; error?: string }
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1').replace(/\/$/, '')
+const indiaTimezone = 'Asia/Kolkata'
 const locations = [
-  { id: 'kolkata', name: 'Kolkata', latitude: 22.57, longitude: 88.36, timezone: 'Asia/Kolkata' },
-  { id: 'mumbai', name: 'Mumbai', latitude: 19.076, longitude: 72.8777, timezone: 'Asia/Kolkata' },
-  { id: 'new-delhi', name: 'New Delhi', latitude: 28.6139, longitude: 77.209, timezone: 'Asia/Kolkata' },
-  { id: 'bengaluru', name: 'Bengaluru', latitude: 12.9716, longitude: 77.5946, timezone: 'Asia/Kolkata' },
-  { id: 'chennai', name: 'Chennai', latitude: 13.0827, longitude: 80.2707, timezone: 'Asia/Kolkata' },
-] as const
+  { id: 'kolkata', name: 'Kolkata, West Bengal', latitude: 22.57, longitude: 88.36 },
+  { id: 'mumbai', name: 'Mumbai, Maharashtra', latitude: 19.076, longitude: 72.8777 },
+  { id: 'new-delhi', name: 'New Delhi, Delhi', latitude: 28.6139, longitude: 77.209 },
+  { id: 'bengaluru', name: 'Bengaluru, Karnataka', latitude: 12.9716, longitude: 77.5946 },
+  { id: 'chennai', name: 'Chennai, Tamil Nadu', latitude: 13.0827, longitude: 80.2707 },
+  { id: 'agartala', name: 'Agartala, Tripura', latitude: 23.83605, longitude: 91.27939 },
+  { id: 'aizawl', name: 'Aizawl, Mizoram', latitude: 23.72894, longitude: 92.71791 },
+  { id: 'amaravati', name: 'Amaravati, Andhra Pradesh', latitude: 16.514, longitude: 80.516 },
+  { id: 'amritsar', name: 'Amritsar, Punjab', latitude: 31.62234, longitude: 74.87534 },
+  { id: 'bhopal', name: 'Bhopal, Madhya Pradesh', latitude: 23.25469, longitude: 77.40289 },
+  { id: 'bhubaneswar', name: 'Bhubaneswar, Odisha', latitude: 20.27241, longitude: 85.83385 },
+  { id: 'chandigarh', name: 'Chandigarh', latitude: 30.73629, longitude: 76.7884 },
+  { id: 'daman', name: 'Daman, Dadra and Nagar Haveli and Daman and Diu', latitude: 20.41431, longitude: 72.83236 },
+  { id: 'dehradun', name: 'Dehradun, Uttarakhand', latitude: 30.32443, longitude: 78.03392 },
+  { id: 'dispur', name: 'Dispur, Assam', latitude: 26.13564, longitude: 91.80069 },
+  { id: 'gangtok', name: 'Gangtok, Sikkim', latitude: 27.32574, longitude: 88.61216 },
+  { id: 'gandhinagar', name: 'Gandhinagar, Gujarat', latitude: 23.21667, longitude: 72.68333 },
+  { id: 'hyderabad', name: 'Hyderabad, Telangana', latitude: 17.38405, longitude: 78.45636 },
+  { id: 'imphal', name: 'Imphal, Manipur', latitude: 24.80805, longitude: 93.9442 },
+  { id: 'itanagar', name: 'Itanagar, Arunachal Pradesh', latitude: 27.08694, longitude: 93.60987 },
+  { id: 'jaipur', name: 'Jaipur, Rajasthan', latitude: 26.91962, longitude: 75.78781 },
+  { id: 'kavaratti', name: 'Kavaratti, Lakshadweep', latitude: 10.56688, longitude: 72.64203 },
+  { id: 'kohima', name: 'Kohima, Nagaland', latitude: 25.67467, longitude: 94.11099 },
+  { id: 'leh', name: 'Leh, Ladakh', latitude: 34.16504, longitude: 77.58402 },
+  { id: 'lucknow', name: 'Lucknow, Uttar Pradesh', latitude: 26.83928, longitude: 80.92313 },
+  { id: 'panaji', name: 'Panaji, Goa', latitude: 15.49574, longitude: 73.82624 },
+  { id: 'patna', name: 'Patna, Bihar', latitude: 25.59408, longitude: 85.13563 },
+  { id: 'port-blair', name: 'Port Blair, Andaman and Nicobar Islands', latitude: 11.66613, longitude: 92.74635 },
+  { id: 'puducherry', name: 'Puducherry', latitude: 11.93381, longitude: 79.82979 },
+  { id: 'raipur', name: 'Raipur, Chhattisgarh', latitude: 21.23333, longitude: 81.63333 },
+  { id: 'ranchi', name: 'Ranchi, Jharkhand', latitude: 23.34316, longitude: 85.3094 },
+  { id: 'shimla', name: 'Shimla, Himachal Pradesh', latitude: 31.10442, longitude: 77.16662 },
+  { id: 'shillong', name: 'Shillong, Meghalaya', latitude: 25.56892, longitude: 91.88313 },
+  { id: 'srinagar', name: 'Srinagar, Jammu and Kashmir', latitude: 34.08565, longitude: 74.80555 },
+  { id: 'thiruvananthapuram', name: 'Thiruvananthapuram, Kerala', latitude: 8.4855, longitude: 76.94924 },
+].map((location) => ({ ...location, timezone: indiaTimezone }))
 const endpoints = [
   { key: 'saved', path: '/impact/metrics/co2_saved', label: 'CO₂ saved' },
   { key: 'averageSaved', path: '/impact/metrics/co2_saved_baseline_b', label: 'Daily-average baseline' },
@@ -91,15 +123,40 @@ function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour
 }
 
 function App() {
+  const [showDashboard, setShowDashboard] = useState(false)
   const [data, setData] = useState<DashboardState>(initialState)
+  const [selectedReport, setSelectedReport] = useState<Record<string, unknown> | null>(null)
+  const reportDialogRef = useRef<HTMLDialogElement>(null)
   const [weatherMode, setWeatherMode] = useState<'realtime' | 'hourly' | 'daily'>('hourly')
   const [weatherView, setWeatherView] = useState<ViewState>({ payload: null, status: 'loading' })
   const [selectedLocationId, setSelectedLocationId] = useState<string>('kolkata')
+  const [locationPoint, setLocationPoint] = useState<LocationPoint>({ latitude: 22.57, longitude: 88.36 })
+  const [mapPoint, setMapPoint] = useState<LocationPoint>({ latitude: 22.57, longitude: 88.36 })
+  const [locationTimezone, setLocationTimezone] = useState('Asia/Kolkata')
+  const [timezoneSource, setTimezoneSource] = useState('ESTIMATED')
+  const [mapOpen, setMapOpen] = useState(false)
+  const [zoomEarthUrl, setZoomEarthUrl] = useState('')
+  const [zoomEarthError, setZoomEarthError] = useState<string | null>(null)
+  const locationDialogRef = useRef<HTMLDialogElement>(null)
   const [locationLoading, setLocationLoading] = useState(true)
   const [locationError, setLocationError] = useState<string | null>(null)
   const [isDarkMode, setIsDarkMode] = useState(() => window.localStorage.getItem('nrg-theme') === 'dark')
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+
+  useEffect(() => {
+    const dialog = reportDialogRef.current
+    if (!dialog) return
+    if (selectedReport && !dialog.open) dialog.showModal()
+    if (!selectedReport && dialog.open) dialog.close()
+  }, [selectedReport])
+
+  useEffect(() => {
+    const dialog = locationDialogRef.current
+    if (!dialog) return
+    if (mapOpen && !dialog.open) dialog.showModal()
+    if (!mapOpen && dialog.open) dialog.close()
+  }, [mapOpen])
 
   const refresh = useCallback(async () => {
     setRefreshing(true)
@@ -133,26 +190,33 @@ function App() {
           if (isRecord(response) && isRecord(response.location)) {
             const { latitude, longitude } = response.location
             if (typeof latitude === 'number' && typeof longitude === 'number') {
+              const point = { latitude, longitude }
+              setLocationPoint(point)
+              setMapPoint(point)
               const savedLocation = locations.find((location) =>
                 Math.abs(location.latitude - latitude) < 0.0001 && Math.abs(location.longitude - longitude) < 0.0001,
               )
               setSelectedLocationId(savedLocation?.id ?? 'custom')
             }
+            if (typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
+            if (typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
           }
         } catch (error) {
           setLocationError(error instanceof Error ? error.message : 'Could not load the saved location')
         } finally {
           setLocationLoading(false)
-          await refresh()
         }
       })()
     }, 0)
+    return () => window.clearTimeout(initialTimer)
+  }, [])
+
+  useEffect(() => {
+    if (!showDashboard) return
+    void refresh()
     const timer = window.setInterval(() => void refresh(), 60_000)
-    return () => {
-      window.clearTimeout(initialTimer)
-      window.clearInterval(timer)
-    }
-  }, [refresh])
+    return () => window.clearInterval(timer)
+  }, [refresh, showDashboard])
 
   const changeLocation = async (locationId: string) => {
     const location = locations.find((option) => option.id === locationId)
@@ -160,17 +224,60 @@ function App() {
     setLocationLoading(true)
     setLocationError(null)
     try {
-      await postJson('/location', {
+      const response = await postJson('/location', {
         latitude: location.latitude,
         longitude: location.longitude,
         timezone: location.timezone,
       })
       setSelectedLocationId(location.id)
+      setLocationPoint({ latitude: location.latitude, longitude: location.longitude })
+      setMapPoint({ latitude: location.latitude, longitude: location.longitude })
+      if (isRecord(response) && isRecord(response.location) && typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
+      if (isRecord(response) && typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
       await refresh()
     } catch (error) {
       setLocationError(error instanceof Error ? error.message : 'Could not update the location')
     } finally {
       setLocationLoading(false)
+    }
+  }
+
+  const applyMapLocation = async (openDashboard = false) => {
+    setLocationLoading(true)
+    setLocationError(null)
+    try {
+      const response = await postJson('/location', mapPoint)
+      setLocationPoint(mapPoint)
+      setSelectedLocationId('custom')
+      if (isRecord(response) && isRecord(response.location) && typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
+      if (isRecord(response) && typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
+      if (openDashboard) setShowDashboard(true)
+      else {
+        setMapOpen(false)
+        await refresh()
+      }
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : 'Could not update the location')
+    } finally {
+      setLocationLoading(false)
+    }
+  }
+
+  const importZoomEarthLocation = () => {
+    try {
+      const url = new URL(zoomEarthUrl)
+      if (url.hostname !== 'zoom.earth' && !url.hostname.endsWith('.zoom.earth')) throw new Error('Use a Zoom Earth map URL')
+      const view = url.hash.match(/(?:^#|&)view=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)(?:,[\d.]+z)?/i)
+      if (!view) throw new Error('The URL does not include map coordinates')
+      const latitude = Number(view[1])
+      const longitude = Number(view[2])
+      if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+        throw new Error('The Zoom Earth coordinates are outside valid ranges')
+      }
+      setMapPoint({ latitude, longitude })
+      setZoomEarthError(null)
+    } catch (error) {
+      setZoomEarthError(error instanceof Error ? error.message : 'Could not read that Zoom Earth link')
     }
   }
 
@@ -197,7 +304,7 @@ function App() {
   const connected = Object.values(data).filter((item) => item.status === 'online').length
   const allConnected = connected === endpoints.length
 
-  return (
+  return showDashboard ? (
     <main className="app-shell">
       <div className="topography-backdrop" aria-hidden="true">
         <Topography
@@ -226,7 +333,6 @@ function App() {
         />
       </div>
       <header className="topbar">
-        <GlassSurface className="topbar-glass" width="100%" height="100%" borderRadius={0} backgroundOpacity={0.12} displace={0.35}>
         <a className="brand" href="#top" aria-label="NRG home">
           <span className="brand-mark"><PulseIcon /></span>
           <span>NRG</span>
@@ -241,7 +347,6 @@ function App() {
           </button>
           <span className="avatar">TP</span>
         </div>
-        </GlassSurface>
       </header>
 
       <div className="page-content" id="top">
@@ -264,6 +369,8 @@ function App() {
                 {selectedLocationId === 'custom' && <option value="custom" disabled>Current custom location</option>}
                 {locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
               </select>
+              <span className="location-timezone">Timezone: {locationTimezone} <SourceBadge source={timezoneSource} /></span>
+              <button className="map-open-button" type="button" disabled={locationLoading} onClick={() => { setMapPoint(locationPoint); setMapOpen(true) }}>Choose on map</button>
               {locationError && <span className="location-error" role="alert">{locationError}</span>}
             </label>
           </div>
@@ -369,12 +476,47 @@ function App() {
           <article className="panel report-history-panel">
             <CardGlass />
             <div className="panel-heading"><div><div className="section-kicker">REPORT ARCHIVE</div><h2>Recent reports</h2></div><span className="count-chip">{reportsRows.length} reports</span></div>
-            {reportsRows.length ? <div className="report-history">{reportsRows.slice(0, 4).map((item, index) => <div className="history-row" key={`${String(item.created_at)}-${index}`}><span className="history-icon"><ReportIcon /></span><div><strong>{formatTime(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</strong><span>{asText(item.body, 'Daily grid summary')}</span></div><span className="history-arrow">↗</span></div>)}</div> : <EmptyState state={data.reports} label="Reports" />}
+            {reportsRows.length ? <div className="report-history">{reportsRows.slice(0, 4).map((item, index) => <button className="history-row" type="button" key={`${String(item.created_at)}-${index}`} aria-label={`Open report from ${formatTime(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`} onClick={() => setSelectedReport(item)}><span className="history-icon"><ReportIcon /></span><div><strong>{formatTime(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</strong><span>{asText(item.body, 'Daily grid summary')}</span></div><span className="history-arrow" aria-hidden="true">↗</span></button>)}</div> : <EmptyState state={data.reports} label="Reports" />}
           </article>
         </section>
 
         <footer className="page-footer"><span>NRG <b>·</b> Autonomous Grid Carbon Optimizer</span><span>{lastUpdated ? `Updated ${formatTime(lastUpdated.toISOString())}` : 'Connecting to API'} <b>·</b> <a href={`${API_BASE.replace('/api/v1', '')}/docs`} target="_blank" rel="noreferrer">API docs ↗</a></span></footer>
       </div>
+      <dialog className="report-dialog" ref={reportDialogRef} aria-labelledby="report-dialog-title" onClose={() => setSelectedReport(null)}>
+        {selectedReport && <div className="report-dialog-content">
+          <div className="location-dialog-heading"><div><div className="section-kicker">REPORT ARCHIVE</div><h2 id="report-dialog-title">Report details</h2></div><button className="report-dialog-close" type="button" aria-label="Close report" onClick={() => setSelectedReport(null)}>×</button></div>
+          <div className="report-dialog-meta"><span>{formatTime(selectedReport.created_at, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span><SourceBadge source={asText(selectedReport.source, 'SIMULATED')} /></div>
+          <p className="report-dialog-body">{asText(selectedReport.body, 'Report is empty.')}</p>
+        </div>}
+      </dialog>
+      <dialog className="location-dialog" ref={locationDialogRef} aria-labelledby="location-dialog-title" onClose={() => setMapOpen(false)}>
+        <div className="location-dialog-content">
+          <div className="location-dialog-heading"><div><div className="section-kicker">GRID LOCATION</div><h2 id="location-dialog-title">Choose a point on the map</h2></div><button className="report-dialog-close" type="button" aria-label="Close map" onClick={() => setMapOpen(false)}>×</button></div>
+          <p className="location-map-help">Click the map, or paste a Zoom Earth map URL to import its map center. Open-Meteo resolves the IANA timezone when you apply the point.</p>
+          <div className="zoom-earth-import"><label htmlFor="zoom-earth-url">ZOOM EARTH MAP URL</label><div><input id="zoom-earth-url" type="url" value={zoomEarthUrl} onChange={(event) => setZoomEarthUrl(event.target.value)} placeholder="https://zoom.earth/maps/satellite/#view=..." /><button type="button" onClick={importZoomEarthLocation}>Import</button></div>{zoomEarthError && <span role="alert">{zoomEarthError}</span>}</div>
+          {mapOpen && <LocationPicker point={mapPoint} onSelect={setMapPoint} />}
+          <div className="location-map-footer"><span>{mapPoint.latitude.toFixed(4)}, {mapPoint.longitude.toFixed(4)}</span><a href={`https://zoom.earth/maps/satellite/#view=${mapPoint.latitude.toFixed(4)},${mapPoint.longitude.toFixed(4)},6z`} target="_blank" rel="noreferrer">View this point in Zoom Earth ↗</a></div>
+          {locationError && <span className="location-error" role="alert">{locationError}</span>}
+          <button className="map-apply-button" type="button" disabled={locationLoading} onClick={() => void applyMapLocation()}>{locationLoading ? 'Resolving timezone…' : 'Use this location'}</button>
+        </div>
+      </dialog>
+    </main>
+  ) : (
+    <main className="location-start-shell">
+      <header className="location-start-header"><a className="brand" href="#location-start" aria-label="NRG home"><span className="brand-mark"><PulseIcon /></span><span>NRG</span></a><span>GRID LOCATION SETUP</span></header>
+      <section className="location-start-content" id="location-start">
+        <div className="eyebrow"><span className="eyebrow-line" /> FIRST · SET YOUR LOCATION</div>
+        <h1>Choose where<br /><span>your grid lives.</span></h1>
+        <p className="location-start-copy">Select a point on the map or import its position from Zoom Earth. We’ll resolve the timezone, save your location, and then load the dashboard.</p>
+        <div className="location-start-map-card">
+          <div className="zoom-earth-import"><label htmlFor="startup-zoom-earth-url">ZOOM EARTH MAP URL</label><div><input id="startup-zoom-earth-url" type="url" value={zoomEarthUrl} onChange={(event) => setZoomEarthUrl(event.target.value)} placeholder="https://zoom.earth/maps/satellite/#view=..." /><button type="button" onClick={importZoomEarthLocation}>Import</button></div>{zoomEarthError && <span role="alert">{zoomEarthError}</span>}</div>
+          <LocationPicker point={mapPoint} onSelect={setMapPoint} />
+          <div className="location-start-map-footer"><span>{mapPoint.latitude.toFixed(4)}, {mapPoint.longitude.toFixed(4)} · saved zone: {locationTimezone}</span><a href={`https://zoom.earth/maps/satellite/#view=${mapPoint.latitude.toFixed(4)},${mapPoint.longitude.toFixed(4)},6z`} target="_blank" rel="noreferrer">Open selected point in Zoom Earth ↗</a></div>
+          {locationError && <p className="location-start-error" role="alert">{locationError}</p>}
+          <button className="location-start-submit" type="button" disabled={locationLoading} onClick={() => void applyMapLocation(true)}>{locationLoading ? 'Loading saved location…' : 'Resolve timezone & open dashboard'}</button>
+        </div>
+      </section>
+      <footer className="location-start-footer">NRG · Automated forecasts begin after location setup</footer>
     </main>
   )
 }
