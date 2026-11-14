@@ -50,6 +50,8 @@ def test_scenario_scales_flexible_load_profile_to_published_household_average():
 
     result = run_scenario(forecasts, households=3)
 
-    assert result["summary"]["energy_consumed_kwh"] == round(AVERAGE_HOUSEHOLD_DAILY_KWH * 3, 2)
+    assert result["summary"]["energy_consumed_kwh"] == round(AVERAGE_HOUSEHOLD_DAILY_KWH * 0.19 * 3, 2)
+    assert {row["load"] for row in result["decisions"]} == {"ac_precool", "washing_machine"}
     assert "1,805 kWh per household-year" in result["methodology"]
-    assert "not household meter data" in result["methodology"]
+    assert "Upper-bound estimate" in result["methodology"]
+    assert "11%, washing machines 8%" in result["methodology"]

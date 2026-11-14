@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
-from app.simulator.fleet import KINDS
-
 AVERAGE_HOUSEHOLD_DAILY_KWH = 1805 / 365
+FLEXIBLE_LOADS = {
+    "ac_precool": (0.11, 2, 16, 20),
+    "washing_machine": (0.08, 1, 9, 22),
+}
 
 
 def run_scenario(forecast_rows: list[dict], households: int, max_concurrent_loads: int = 12) -> dict:
@@ -24,11 +26,9 @@ def run_scenario(forecast_rows: list[dict], households: int, max_concurrent_load
     daily_average = sum(intensities.values()) / len(intensities)
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     loads = []
-    average_profile_kwh = sum((minimum_kwh + maximum_kwh) / 2 for minimum_kwh, maximum_kwh, *_ in KINDS.values())
-    profile_scale = AVERAGE_HOUSEHOLD_DAILY_KWH / average_profile_kwh
     for household in range(1, households + 1):
-        for kind, (minimum_kwh, maximum_kwh, duration, usual_hour, deadline_hour) in KINDS.items():
-            energy_kwh = round((minimum_kwh + maximum_kwh) / 2 * profile_scale, 4)
+        for kind, (consumption_share, duration, usual_hour, deadline_hour) in FLEXIBLE_LOADS.items():
+            energy_kwh = round(AVERAGE_HOUSEHOLD_DAILY_KWH * consumption_share, 4)
             baseline_at = now.replace(hour=usual_hour)
             if baseline_at < now:
                 baseline_at += timedelta(days=1)
@@ -111,7 +111,7 @@ def run_scenario(forecast_rows: list[dict], households: int, max_concurrent_load
     return {
         "source": "SIMULATED",
         "forecast_source": forecast_source,
-        "methodology": f"Estimated from the Bureau of Energy Efficiency survey mean of 1,805 kWh per household-year (4.95 kWh/day). The flexible appliance mix and timing are modeled; its energy is scaled to that average and scheduled against the lowest-intensity feasible forecast window with a cap of {max_concurrent_loads} simultaneous estimated loads. Energy use stays constant. This is an estimate, not household meter data; no devices are controlled.",
+        "methodology": f"Upper-bound estimate based on the Bureau of Energy Efficiency survey mean of 1,805 kWh per household-year (4.95 kWh/day) and reported appliance consumption shares: air conditioners 11%, washing machines 8%. Only those two modeled flexible loads are scheduled, so their combined energy is 19% of average household use; the time windows and shiftability are assumptions, not meter readings. Loads use the lowest-intensity feasible forecast window with a cap of {max_concurrent_loads} simultaneous estimated loads. Total energy stays constant; no devices are controlled.",
         "summary": {
             "households": households,
             "max_concurrent_loads": max_concurrent_loads,
