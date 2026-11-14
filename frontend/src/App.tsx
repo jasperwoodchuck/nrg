@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import Crosshair from './component/Crosshair.jsx'
 import LocationPicker, { type LocationPoint } from './component/LocationPicker'
 import Topography from './component/Topography.jsx'
@@ -96,6 +96,13 @@ type EndpointKey = (typeof endpoints)[number]['key']
 type DashboardState = Record<EndpointKey, ViewState>
 
 const initialState = Object.fromEntries(endpoints.map(({ key }) => [key, { payload: null, status: 'loading' }])) as DashboardState
+const dashboardTabs = [
+  ['overview', 'Overview'],
+  ['power', 'Power'],
+  ['weather', 'Weather'],
+  ['environment', 'Environment'],
+  ['reports', 'Reports'],
+] as const
 
 const hourlyLoadProfile = Array.from({ length: 168 }, (_, index) => {
   const hour = index % 24
@@ -250,6 +257,9 @@ function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour
 function App() {
   const [showDashboard, setShowDashboard] = useState(false)
   const [activeDashboardTab, setActiveDashboardTab] = useState<'overview' | 'power' | 'weather' | 'environment' | 'reports'>('overview')
+  const dashboardTabsRef = useRef<HTMLElement>(null)
+  const dashboardTabButtonsRef = useRef<Array<HTMLButtonElement | null>>([])
+  const [tabIndicator, setTabIndicator] = useState({ left: 5, width: 0 })
   const [data, setData] = useState<DashboardState>(initialState)
   const [scenarioResult, setScenarioResult] = useState<ScenarioResult | null>(null)
   const [scenarioHouseholds, setScenarioHouseholds] = useState(30)
@@ -278,6 +288,23 @@ function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => window.localStorage.getItem('nrg-theme') === 'dark')
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+
+  useLayoutEffect(() => {
+    const nav = dashboardTabsRef.current
+    if (!nav) return
+    const updateIndicator = () => {
+      const index = dashboardTabs.findIndex(([tab]) => tab === activeDashboardTab)
+      const button = dashboardTabButtonsRef.current[index]
+      if (!button) return
+      const navBounds = nav.getBoundingClientRect()
+      const buttonBounds = button.getBoundingClientRect()
+      setTabIndicator({ left: buttonBounds.left - navBounds.left, width: buttonBounds.width })
+    }
+    updateIndicator()
+    const observer = new ResizeObserver(updateIndicator)
+    observer.observe(nav)
+    return () => observer.disconnect()
+  }, [activeDashboardTab])
 
   useEffect(() => {
     const dialog = reportDialogRef.current
@@ -576,20 +603,14 @@ function App() {
           </div>
         </section>
 
-        <nav className="dashboard-tabs" role="tablist" aria-label="Dashboard sections">
-          {([
-            ['overview', 'Overview'],
-            ['power', 'Power'],
-            ['weather', 'Weather'],
-            ['environment', 'Environment'],
-            ['reports', 'Reports'],
-          ] as const).map(([tab, label]) => <button key={tab} id={`dashboard-tab-${tab}`} className="dashboard-tab" type="button" role="tab" aria-selected={activeDashboardTab === tab} aria-controls={`dashboard-panel-${tab}`} tabIndex={activeDashboardTab === tab ? 0 : -1} onClick={() => setActiveDashboardTab(tab)} onKeyDown={(event) => {
-            const tabs = ['overview', 'power', 'weather', 'environment', 'reports'] as const
-            const currentIndex = tabs.indexOf(tab)
-            const nextIndex = event.key === 'ArrowRight' ? (currentIndex + 1) % tabs.length : event.key === 'ArrowLeft' ? (currentIndex - 1 + tabs.length) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
+        <nav ref={dashboardTabsRef} className="dashboard-tabs" role="tablist" aria-label="Dashboard sections">
+          <span className="dashboard-tab-indicator" aria-hidden="true" style={{ width: tabIndicator.width, transform: `translateX(${tabIndicator.left - 5}px)` }}><span key={activeDashboardTab} /></span>
+          {dashboardTabs.map(([tab, label], index) => <button ref={(element) => { dashboardTabButtonsRef.current[index] = element }} key={tab} id={`dashboard-tab-${tab}`} className="dashboard-tab" type="button" role="tab" aria-selected={activeDashboardTab === tab} aria-controls={`dashboard-panel-${tab}`} tabIndex={activeDashboardTab === tab ? 0 : -1} onClick={() => setActiveDashboardTab(tab)} onKeyDown={(event) => {
+            const currentIndex = dashboardTabs.findIndex(([item]) => item === tab)
+            const nextIndex = event.key === 'ArrowRight' ? (currentIndex + 1) % dashboardTabs.length : event.key === 'ArrowLeft' ? (currentIndex - 1 + dashboardTabs.length) % dashboardTabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? dashboardTabs.length - 1 : -1
             if (nextIndex >= 0) {
               event.preventDefault()
-              const nextTab = tabs[nextIndex]
+              const nextTab = dashboardTabs[nextIndex][0]
               setActiveDashboardTab(nextTab)
               document.getElementById(`dashboard-tab-${nextTab}`)?.focus()
             }
