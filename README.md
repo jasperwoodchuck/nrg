@@ -18,6 +18,14 @@ The API creates its SQLite database and seeds demo history on startup. OpenAPI i
 
 Copy `backend/.env.example` to `backend/.env` (or export variables in the process environment). Set the frontend API URL in `frontend/.env` using `frontend/.env.example`. Set `FRONTEND_ORIGIN` in the backend environment to the browser origin if it differs from `http://localhost:5173`. Defaults target Kolkata, India. The location selector includes cities across all Indian states and union territories; the map picker accepts any coordinates and asks Open-Meteo to resolve their IANA timezone. You can import coordinates by pasting a Zoom Earth map URL or open the selected point in Zoom Earth. `DATABASE_URL` defaults to a local SQLite file. The India grid anchor and fallback model coefficients can be adjusted using the documented variables. `ELECTRICITY_MAPS_API_KEY` is reserved for optional integration; this MVP currently relies on the fallback intensity model.
 
+## Use Supabase Postgres
+
+The backend can connect to a Supabase Postgres database through SQLAlchemy. Create a Supabase project, open **Connect** in its dashboard, and copy a database connection URI into the backend's `DATABASE_URL`. Use the direct connection for an IPv6-capable persistent backend, or the Session pooler connection for an IPv4-only host. Use the complete URI supplied by Supabase rather than constructing the pooler host or username yourself. Require SSL with `sslmode=require` if it is not already present in the URI. See [Supabase's connection guide](https://supabase.com/docs/guides/database/connecting-to-postgres).
+
+The project includes Psycopg 3 and adapts `postgresql://` connection URIs for SQLAlchemy. Keep this URI private in the backend environment; the browser only talks to the API and must never receive database credentials. No Supabase frontend key, Auth, or Data API setup is needed for this database connection.
+
+On first backend startup, SQLAlchemy creates the tables defined in `backend/app/db/models.py`. The project does not currently include a migration tool: `create_all` creates missing tables but does not update existing tables when models change. Existing local SQLite data is not copied into Supabase automatically. Keep the API on a persistent backend service because it runs a background scheduler; Vercel hosts the frontend separately. Run one API process for now because each process starts its own scheduler.
+
 ## Deploy the frontend to Vercel
 
 This repository's Vercel project should use `frontend` as its **Root Directory**. Vercel can use the existing Bun lockfile and Vite setup; the build command is `bun run build` and the output directory is `dist`. `frontend/vercel.json` rewrites SPA routes to `index.html` so direct links and refreshes continue to load the app, following [Vercel's Vite SPA guidance](https://vercel.com/docs/frameworks/frontend/vite).
