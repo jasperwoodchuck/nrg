@@ -19,6 +19,7 @@ from app.db.models import AppState, CacheRecord, ForecastRecord, Report, Scenari
 from app.modules.impact.service import completed_rows, metric, range_start
 from app.modules.impact.engine import summarize
 from app.modules.environment.monitoring import get_air_quality, get_water_quality, water_quality_regions
+from app.modules.environment.waste import build_collection_plan
 from app.modules.energy.location import (
     LocationInput,
     current_location,
@@ -323,6 +324,11 @@ def air_quality(session: Session = Depends(get_session)):
         return get_air_quality(session)
     except RuntimeError as error:
         raise HTTPException(502, str(error)) from error
+
+
+@app.get("/api/v1/environment/waste/collection-plan")
+def waste_collection_plan():
+    return build_collection_plan()
 
 
 @app.get("/api/v1/environment/water-quality/regions")

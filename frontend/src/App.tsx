@@ -90,6 +90,7 @@ const endpoints = [
   { key: 'latestReport', path: '/reports/latest', label: 'Latest report' },
   { key: 'reports', path: '/reports', label: 'Reports' },
   { key: 'health', path: '/health', label: 'Health' },
+  { key: 'wastePlan', path: '/environment/waste/collection-plan', label: 'Waste collection plan' },
 ] as const
 
 type EndpointKey = (typeof endpoints)[number]['key']
@@ -442,6 +443,10 @@ function App() {
   const loadRows = isRecord(loadsPayload) ? asList(loadsPayload.loads).filter(isRecord) : []
   const insightRows = isRecord(insightsPayload) ? asList(insightsPayload.insights).filter(isRecord) : []
   const reportsRows = isRecord(reportsPayload) ? asList(reportsPayload.reports).filter(isRecord) : []
+  const wastePlanPayload = payload('wastePlan')
+  const wastePlan = isRecord(wastePlanPayload) ? wastePlanPayload : null
+  const wasteSummary = wastePlan && isRecord(wastePlan.summary) ? wastePlan.summary : null
+  const wasteBins = wastePlan ? asList(wastePlan.bins).filter(isRecord) : []
   const latestReport = isRecord(latestPayload) && isRecord(latestPayload.report) ? latestPayload.report : null
   const healthRaw = payload('health')
   const healthPayload = isRecord(healthRaw) ? healthRaw : null
@@ -649,6 +654,24 @@ function App() {
               </article>
             })}</div> : waterQualityPayload ? <div className="water-empty-note">{asText(waterQualityPayload.note, 'No nearby water samples are available.')}</div> : <EmptyState state={waterQualityView} label="CPCB water-quality data" />}
             {waterQualityPayload && <p className="environment-note">{asText(waterQualityPayload.note)} · <a href="https://nwdp.nwic.gov.in/en/dataset/surface-water-quality-manual-chemical-parameters-cpcb" target="_blank" rel="noreferrer">National Water Data Portal · CPCB</a></p>}
+          </article>
+        </section>
+
+        <section className="content-grid waste-grid" aria-label="Simulated waste collection automation">
+          <article className="panel waste-panel">
+            <div className="panel-heading"><div><div className="section-kicker">SIMULATED WASTE MANAGEMENT</div><h2>Priority collection plan</h2></div><SourceBadge source={asText(wastePlan?.source, 'SIMULATED')} /></div>
+            {wasteSummary ? <>
+              <p className="waste-plan-note">{asText(wastePlan?.methodology)} This is a demonstration model; readings are not connected to physical bins.</p>
+              <div className="waste-summary">
+                <div><span>PLANNED PICKUPS</span><strong>{asNumber(wasteSummary.pickups_planned)} <small>/ {asNumber(wasteSummary.pickups_recommended)} recommended</small></strong></div>
+                <div><span>WASTE ON ROUTE</span><strong>{asNumber(wasteSummary.planned_waste_kg).toFixed(1)} <small>kg</small></strong></div>
+                <div><span>OVERFLOW RISK</span><strong>{asNumber(wasteSummary.projected_overflow_risk_after)} <small>bins after · {asNumber(wasteSummary.projected_overflow_risk_before)} before</small></strong></div>
+              </div>
+              <div className="table-wrap waste-table-wrap"><table className="waste-table"><thead><tr><th>BIN / ZONE</th><th>FILL NOW</th><th>PROJECTED 12H</th><th>EST. WASTE</th><th>ROUTE</th></tr></thead><tbody>
+                {wasteBins.map((bin) => <tr key={asText(bin.id)}><td><strong>{asText(bin.id)}</strong><span className="waste-zone">{asText(bin.zone)}</span></td><td>{asNumber(bin.fill_percent)}%</td><td>{asNumber(bin.projected_fill_12h)}%</td><td>{asNumber(bin.estimated_waste_kg).toFixed(1)} kg</td><td><span className={bin.selected === true ? 'waste-status waste-selected' : bin.pickup_recommended === true ? 'waste-status waste-deferred' : 'waste-status'}>{bin.selected === true ? 'PICKUP' : bin.pickup_recommended === true ? 'CAPACITY LIMITED' : 'MONITOR'}</span></td></tr>)}
+              </tbody></table></div>
+              <p className="environment-note">{asNumber(wasteSummary.bins_monitored)} simulated bins · {asNumber(wastePlan?.truck_capacity_kg)} kg vehicle capacity · priority threshold projected at 80%</p>
+            </> : <EmptyState state={data.wastePlan} label="Waste collection plan" />}
           </article>
         </section>
 

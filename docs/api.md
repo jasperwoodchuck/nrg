@@ -11,6 +11,7 @@ Routes are read-only JSON except the location selector and demo operator control
 - `GET /api/v1/environment/air-quality`: Open-Meteo/Copernicus CAMS Global modeled PM2.5, PM10, nitrogen dioxide, and ozone conditions plus a 48-hour hourly series for the selected location. Responses are cached for 30 minutes and identify modeled data; this is not a local sensor reading.
 - `GET /api/v1/environment/water-quality/regions`: CPCB state dataset list from the National Water Data Portal.
 - `GET /api/v1/environment/water-quality?region=West%20Bengal&radius_km=100`: latest manual surface-water sample per nearby CPCB station, with available lab parameters and sample date. Data is from the portal's 2021–2025 datasets, cached for 24 hours, and is not live monitoring or a drinking-water safety determination. `radius_km` accepts 1–500; `region` must match a listed state.
+- `GET /api/v1/environment/waste/collection-plan`: simulated bin fill projection and a pickup plan that selects bins projected to reach 80% fill within 12 hours, ordered by projected fill and constrained by a 300 kg truck capacity. Bin readings and route outcomes are illustrative; no sensors or vehicles are connected.
 - `GET /api/v1/schedule`: simulated load decisions, baseline, selected window, savings, and reason.
 - `GET /api/v1/loads`: virtual fleet and status.
 - `GET /api/v1/insights`: biggest saving, cleanest forecast hour tomorrow, and highest forecast intensity.

@@ -182,6 +182,23 @@ td { font-size: 12px; }
 }
 
 .environment-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 15px; margin-bottom: 15px; }
+.waste-grid { grid-template-columns: 1fr; }
+.waste-plan-note { position: relative; margin: -5px 0 16px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.waste-summary { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+.waste-summary > div { display: flex; min-width: 0; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 7px; padding: 11px; background: color-mix(in srgb, var(--page-bg) 68%, transparent); }
+.waste-summary span { color: var(--muted); font: 8px var(--mono); letter-spacing: .35px; }
+.waste-summary strong { color: var(--ink); font: 650 17px Manrope, sans-serif; }
+.waste-summary small { color: var(--muted); font: 9px var(--mono); font-weight: 400; }
+.waste-table-wrap { position: relative; }
+.waste-table { min-width: 620px; }
+.waste-table td { height: 42px; }
+.waste-table td:first-child { display: table-cell; }
+.waste-table td:first-child strong, .waste-zone { display: block; }
+.waste-table td:first-child strong { color: var(--ink); font-size: 10px; }
+.waste-zone { margin-top: 2px; color: var(--muted); font-size: 9px; }
+.waste-status { color: var(--muted); font: 8px var(--mono); }
+.waste-selected { color: #4b8a5b; }
+.waste-deferred { color: #b17c3e; }
 .environment-panel { min-width: 0; }
 .environment-panel > :not(.environment-glass) { position: relative; z-index: 1; }
 .environment-panel > .environment-glass { border-radius: inherit; }
@@ -219,6 +236,7 @@ td { font-size: 12px; }
 :root[data-theme='dark'] .monitor-refresh, :root[data-theme='dark'] .water-quality-panel .panel-heading select { border-color: #3a4b3e; }
 @media (max-width: 900px) { .environment-grid { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .environment-panel .panel-heading h2 { font-size: 17px; }.environment-subheading { align-items: flex-start; flex-direction: column; gap: 3px; }.water-station-heading { flex-direction: column; gap: 4px; } }
+@media (max-width: 560px) { .waste-summary { grid-template-columns: 1fr; }.waste-summary strong { font-size: 15px; } }
 
 .location-timezone { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font: 8px var(--mono); }
 .location-timezone .source-badge { font-size: 7px; }
