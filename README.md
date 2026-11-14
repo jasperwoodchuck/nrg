@@ -12,11 +12,11 @@ uv sync
 uv run uvicorn app.main:app
 ```
 
-Or from the repository root, run `make run`. The API creates its SQLite database and seeds demo history on startup. OpenAPI is at `/docs`; API endpoints use `/api/v1`.
+The API creates its SQLite database and seeds demo history on startup. OpenAPI is at `/docs`; API endpoints use `/api/v1`.
 
 ## Configuration
 
-Copy `.env.example` to `backend/.env` (or export variables in the process environment). Defaults target Kolkata, India. `DATABASE_URL` defaults to a local SQLite file. The India grid anchor and fallback model coefficients can be adjusted using the documented variables. `ELECTRICITY_MAPS_API_KEY` is reserved for optional integration; this MVP currently relies on the fallback intensity model.
+Copy `backend/.env.example` to `backend/.env` (or export variables in the process environment). The frontend currently requires no environment variables; see `frontend/.env.example`. Defaults target Kolkata, India. `DATABASE_URL` defaults to a local SQLite file. The India grid anchor and fallback model coefficients can be adjusted using the documented variables. `ELECTRICITY_MAPS_API_KEY` is reserved for optional integration; this MVP currently relies on the fallback intensity model.
 
 ## Demo
 
