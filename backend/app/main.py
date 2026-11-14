@@ -9,15 +9,16 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, desc, select, update
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.values import FACTOR_SET_VERSION
 from app.core.config import settings
 from app.db.database import Base, engine, get_session, SessionLocal
-from app.db.models import AppState, CacheRecord, ForecastRecord, Report, VirtualLoad
+from app.db.models import AppState, CacheRecord, ForecastRecord, Report, ScenarioRun, VirtualLoad
 from app.modules.impact.service import completed_rows, metric, range_start
 from app.modules.impact.engine import summarize
+from app.modules.environment.monitoring import get_air_quality, get_water_quality, water_quality_regions
 from app.modules.energy.location import (
     LocationInput,
     current_location,
@@ -36,6 +37,7 @@ scheduler = BackgroundScheduler(timezone="UTC")
 
 class ScenarioInput(BaseModel):
     households: int = Field(default=30, ge=1, le=100)
+    max_concurrent_loads: int = Field(default=12, ge=1, le=200)
 
 
 @asynccontextmanager
@@ -157,9 +159,67 @@ def run_optimization_scenario(request: ScenarioInput, session: Session = Depends
     if not rows:
         raise HTTPException(503, "No upcoming forecast is available. Refresh the forecast and try again.")
     try:
-        return run_scenario([{"timestamp": row.timestamp, "intensity": row.intensity, "source": row.source} for row in rows], request.households)
+        result = run_scenario(
+            [{"timestamp": row.timestamp, "intensity": row.intensity, "source": row.source} for row in rows],
+            request.households,
+            request.max_concurrent_loads,
+        )
     except ValueError as error:
         raise HTTPException(503, str(error)) from error
+    run = ScenarioRun(
+        households=request.households,
+        max_concurrent_loads=request.max_concurrent_loads,
+        forecast_source=result["forecast_source"],
+        methodology=result["methodology"],
+        summary_json=json.dumps(result["summary"], allow_nan=False),
+        decisions_json=json.dumps(result["decisions"], allow_nan=False),
+    )
+    session.add(run)
+    session.flush()
+    keep_ids = select(ScenarioRun.id).order_by(desc(ScenarioRun.id)).limit(100)
+    session.execute(delete(ScenarioRun).where(ScenarioRun.id.not_in(keep_ids)))
+    session.commit()
+    session.refresh(run)
+    result["run_id"] = run.id
+    result["created_at"] = run.created_at.isoformat()
+    return result
+
+
+@app.get("/api/v1/scenario/runs")
+def scenario_runs(limit: int = Query(20, ge=1, le=100), session: Session = Depends(get_session)):
+    runs = list(session.scalars(select(ScenarioRun).order_by(ScenarioRun.created_at.desc(), ScenarioRun.id.desc()).limit(limit)))
+    return {
+        "runs": [
+            {
+                "id": run.id,
+                "created_at": run.created_at.isoformat(),
+                "source": "SIMULATED",
+                "forecast_source": run.forecast_source,
+                "households": run.households,
+                "max_concurrent_loads": run.max_concurrent_loads,
+                "summary": json.loads(run.summary_json),
+            }
+            for run in runs
+        ]
+    }
+
+
+@app.get("/api/v1/scenario/runs/{run_id}")
+def scenario_run_details(run_id: int, session: Session = Depends(get_session)):
+    run = session.get(ScenarioRun, run_id)
+    if run is None:
+        raise HTTPException(404, "Scenario run not found")
+    return {
+        "id": run.id,
+        "created_at": run.created_at.isoformat(),
+        "source": "SIMULATED",
+        "forecast_source": run.forecast_source,
+        "households": run.households,
+        "max_concurrent_loads": run.max_concurrent_loads,
+        "methodology": run.methodology,
+        "summary": json.loads(run.summary_json),
+        "decisions": json.loads(run.decisions_json),
+    }
 
 
 @app.get("/api/v1/weather")
@@ -255,6 +315,36 @@ def weather(mode: Literal["realtime", "hourly", "daily"] = Query("hourly"), sess
         "note": note,
         "data": values,
     }
+
+
+@app.get("/api/v1/environment/air-quality")
+def air_quality(session: Session = Depends(get_session)):
+    try:
+        return get_air_quality(session)
+    except RuntimeError as error:
+        raise HTTPException(502, str(error)) from error
+
+
+@app.get("/api/v1/environment/water-quality/regions")
+def water_quality_region_list():
+    try:
+        return water_quality_regions()
+    except RuntimeError as error:
+        raise HTTPException(502, str(error)) from error
+
+
+@app.get("/api/v1/environment/water-quality")
+def water_quality(
+    region: str = Query(..., min_length=2, max_length=80),
+    radius_km: float = Query(100, ge=1, le=500),
+    session: Session = Depends(get_session),
+):
+    try:
+        return get_water_quality(session, region, settings.latitude, settings.longitude, radius_km)
+    except ValueError as error:
+        raise HTTPException(404, str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(502, str(error)) from error
 
 
 @app.get("/api/v1/schedule")

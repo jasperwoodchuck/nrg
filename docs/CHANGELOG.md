@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-11-14
 
 ### Changed
+- (2026-11-14) Keep the Crosshair's scaled corner brackets on hovered cards and move its long guide lines into the background grid.
+
+### Changed
+- (2026-11-14) Scale the crosshair to dashboard cards on hover and add a subtle grid-line texture behind card content and in the page background.
+
+### Changed
+- (2026-11-14) Replace liquid-glass dashboard card overlays with solid modern surfaces, subtle depth, and hover states.
+
+### Added
+- (2026-11-14) Add the React Bits Crosshair cursor effect to the dashboard, with reduced-motion support and touch-device hiding.
+
+### Changed
 - (2026-11-14) Make map-based location and timezone selection the startup screen; load the dashboard after the location is saved.
 
 ### Added

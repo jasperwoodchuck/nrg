@@ -50,6 +50,18 @@ class Report(Base):
     body: Mapped[str] = mapped_column(Text)
 
 
+class ScenarioRun(Base):
+    __tablename__ = "scenario_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    households: Mapped[int] = mapped_column(Integer)
+    max_concurrent_loads: Mapped[int] = mapped_column(Integer)
+    forecast_source: Mapped[str] = mapped_column(String(20))
+    methodology: Mapped[str] = mapped_column(Text)
+    summary_json: Mapped[str] = mapped_column(Text)
+    decisions_json: Mapped[str] = mapped_column(Text)
+
+
 class AppState(Base):
     __tablename__ = "app_state"
     key: Mapped[str] = mapped_column(String(80), primary_key=True)

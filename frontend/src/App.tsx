@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import Crosshair from './component/Crosshair.jsx'
 import LocationPicker, { type LocationPoint } from './component/LocationPicker'
 import Topography from './component/Topography.jsx'
+import GlassSurface from './component/GlassSurface.jsx'
 import './App.css'
 
 type Metric = { value: number; unit: string; source: string }
@@ -23,9 +24,12 @@ type ScenarioResult = {
   methodology: string
   summary: {
     households: number
+    max_concurrent_loads: number
     total_loads: number
     loads_optimized: number
-    loads_without_window: number
+    loads_not_optimized: number
+    loads_limited_by_capacity: number
+    peak_concurrent_loads: number
     energy_shifted_kwh: number
     energy_consumed_kwh: number
     baseline_co2_g: number
@@ -125,15 +129,18 @@ function parseScenarioResult(value: unknown): ScenarioResult | null {
   if (!isRecord(value) || !isRecord(value.summary) || !Array.isArray(value.decisions)) return null
   const summary = value.summary
   const households = summary.households
+  const maxConcurrentLoads = summary.max_concurrent_loads
   const totalLoads = summary.total_loads
   const loadsOptimized = summary.loads_optimized
-  const loadsWithoutWindow = summary.loads_without_window
+  const loadsNotOptimized = summary.loads_not_optimized
+  const loadsLimitedByCapacity = summary.loads_limited_by_capacity
+  const peakConcurrentLoads = summary.peak_concurrent_loads
   const energyShifted = summary.energy_shifted_kwh
   const energyConsumed = summary.energy_consumed_kwh
   const baselineCo2 = summary.baseline_co2_g
   const optimizedCo2 = summary.optimized_co2_g
   const co2Avoided = summary.co2_avoided_g
-  if ([households, totalLoads, loadsOptimized, loadsWithoutWindow, energyShifted, energyConsumed, baselineCo2, optimizedCo2, co2Avoided].some((number) => typeof number !== 'number' || !Number.isFinite(number))) return null
+  if ([households, maxConcurrentLoads, totalLoads, loadsOptimized, loadsNotOptimized, loadsLimitedByCapacity, peakConcurrentLoads, energyShifted, energyConsumed, baselineCo2, optimizedCo2, co2Avoided].some((number) => typeof number !== 'number' || !Number.isFinite(number))) return null
   if (typeof value.source !== 'string' || typeof value.forecast_source !== 'string' || typeof value.methodology !== 'string') return null
   const decisions: ScenarioDecision[] = []
   for (const item of value.decisions) {
@@ -146,9 +153,12 @@ function parseScenarioResult(value: unknown): ScenarioResult | null {
     methodology: value.methodology,
     summary: {
       households: Number(households),
+      max_concurrent_loads: Number(maxConcurrentLoads),
       total_loads: Number(totalLoads),
       loads_optimized: Number(loadsOptimized),
-      loads_without_window: Number(loadsWithoutWindow),
+      loads_not_optimized: Number(loadsNotOptimized),
+      loads_limited_by_capacity: Number(loadsLimitedByCapacity),
+      peak_concurrent_loads: Number(peakConcurrentLoads),
       energy_shifted_kwh: Number(energyShifted),
       energy_consumed_kwh: Number(energyConsumed),
       baseline_co2_g: Number(baselineCo2),
@@ -202,6 +212,11 @@ function App() {
   const reportDialogRef = useRef<HTMLDialogElement>(null)
   const [weatherMode, setWeatherMode] = useState<'realtime' | 'hourly' | 'daily'>('hourly')
   const [weatherView, setWeatherView] = useState<ViewState>({ payload: null, status: 'loading' })
+  const [airQualityView, setAirQualityView] = useState<ViewState>({ payload: null, status: 'loading' })
+  const [waterQualityView, setWaterQualityView] = useState<ViewState>({ payload: null, status: 'loading' })
+  const [waterRegions, setWaterRegions] = useState<string[]>([])
+  const [waterRegion, setWaterRegion] = useState('West Bengal')
+  const [environmentRefreshing, setEnvironmentRefreshing] = useState(false)
   const [selectedLocationId, setSelectedLocationId] = useState<string>('kolkata')
   const [locationPoint, setLocationPoint] = useState<LocationPoint>({ latitude: 22.57, longitude: 88.36 })
   const [mapPoint, setMapPoint] = useState<LocationPoint>({ latitude: 22.57, longitude: 88.36 })
@@ -305,6 +320,41 @@ function App() {
     return () => window.clearInterval(timer)
   }, [refresh, showDashboard])
 
+  const refreshEnvironmentalData = useCallback(async () => {
+    setEnvironmentRefreshing(true)
+    const [airResult, waterResult] = await Promise.allSettled([
+      getJson('/environment/air-quality'),
+      getJson(`/environment/water-quality?region=${encodeURIComponent(waterRegion)}&radius_km=100`),
+    ])
+    if (airResult.status === 'fulfilled') setAirQualityView({ payload: airResult.value, status: 'online' })
+    else setAirQualityView({ payload: null, status: 'error', error: airResult.reason instanceof Error ? airResult.reason.message : 'Air-quality data unavailable' })
+    if (waterResult.status === 'fulfilled') setWaterQualityView({ payload: waterResult.value, status: 'online' })
+    else setWaterQualityView({ payload: null, status: 'error', error: waterResult.reason instanceof Error ? waterResult.reason.message : 'Water-quality data unavailable' })
+    setEnvironmentRefreshing(false)
+  }, [waterRegion])
+
+  useEffect(() => {
+    let active = true
+    void getJson('/environment/water-quality/regions').then((response) => {
+      if (!active || !isRecord(response)) return
+      const regions = asList(response.regions).filter((region): region is string => typeof region === 'string')
+      setWaterRegions(regions)
+      const selectedName = locations.find((location) => location.id === selectedLocationId)?.name
+      const stateName = selectedName?.split(',').at(-1)?.trim()
+      if (stateName) {
+        const match = regions.find((region) => region.toLowerCase() === stateName.toLowerCase())
+        if (match) setWaterRegion(match)
+      }
+    }).catch(() => {
+      // The water card shows its own data request error if the portal is unavailable.
+    })
+    return () => { active = false }
+  }, [selectedLocationId])
+
+  useEffect(() => {
+    if (showDashboard) void refreshEnvironmentalData()
+  }, [refreshEnvironmentalData, showDashboard, locationPoint.latitude, locationPoint.longitude])
+
   const changeLocation = async (locationId: string) => {
     const location = locations.find((option) => option.id === locationId)
     if (!location) return
@@ -374,6 +424,12 @@ function App() {
   const forecastPayload = payload('forecast')
   const weatherPayload = isRecord(weatherView.payload) ? weatherView.payload : null
   const weatherRows = weatherPayload ? asList(weatherPayload.data).filter(isRecord) : []
+  const airQualityPayload = isRecord(airQualityView.payload) ? airQualityView.payload : null
+  const airCurrent = airQualityPayload && isRecord(airQualityPayload.current) ? airQualityPayload.current : null
+  const airUnits = airQualityPayload && isRecord(airQualityPayload.current_units) ? airQualityPayload.current_units : null
+  const airRows = airQualityPayload ? asList(airQualityPayload.hourly).filter(isRecord) : []
+  const waterQualityPayload = isRecord(waterQualityView.payload) ? waterQualityView.payload : null
+  const waterStations = waterQualityPayload ? asList(waterQualityPayload.stations).filter(isRecord) : []
   const forecastRows = isRecord(forecastPayload) ? asList(forecastPayload.forecast).filter(isRecord) : []
   const nextDay = forecastRows.slice(0, 24)
   const maxIntensity = Math.max(1, ...nextDay.map((row) => asNumber(row.intensity_gco2_kwh)))
@@ -395,7 +451,7 @@ function App() {
 
   return showDashboard ? (
     <main className="app-shell">
-      <Crosshair className="crosshair-overlay" color="#72c98a" opacity={0.58} thickness={1} gap={7} fade={0.25} smoothing={0.25} showCoordinates={false} targetEffect="lock" clickPulse />
+      <Crosshair className="crosshair-overlay" color="#72c98a" opacity={0.58} thickness={1} smoothing={0.25} showCoordinates={false} targetSelector=".metric-card, .panel, button, a" targetEffect="lock" clickPulse />
       <div className="topography-backdrop" aria-hidden="true">
         <Topography
           color="#ffffff"
@@ -499,7 +555,7 @@ function App() {
               <div><span>ENERGY CONSUMED</span><strong>{scenarioResult.summary.energy_consumed_kwh.toFixed(1)} <small>kWh</small></strong><small>Unchanged by scheduling</small></div>
             </div>
             <div className="scenario-emissions"><span>Baseline emissions <strong>{formatCo2Grams(scenarioResult.summary.baseline_co2_g)}</strong></span><span>Optimized emissions <strong>{formatCo2Grams(scenarioResult.summary.optimized_co2_g)}</strong></span><SourceBadge source={scenarioResult.source} /><SourceBadge source={scenarioResult.forecast_source} /></div>
-            <div className="scenario-decisions-heading"><strong>Sample schedule changes</strong><span>{scenarioResult.summary.households} virtual homes · {scenarioResult.summary.loads_without_window} loads had no feasible forecast window</span></div>
+            <div className="scenario-decisions-heading"><strong>Sample schedule changes</strong><span>{scenarioResult.summary.households} virtual homes · grid cap {scenarioResult.summary.max_concurrent_loads} simultaneous · {scenarioResult.summary.loads_limited_by_capacity} limited by capacity · peak {scenarioResult.summary.peak_concurrent_loads}</span></div>
             <div className="table-wrap scenario-table-wrap"><table className="scenario-table"><thead><tr><th>VIRTUAL LOAD</th><th>BASELINE TIME</th><th>OPTIMIZED TIME</th><th>CO₂ AVOIDED</th></tr></thead><tbody>
               {scenarioResult.decisions.slice(0, 8).map((item, index) => <tr key={`${item.household}-${item.load}-${index}`}><td><span className="device-name">{formatKind(item.load)}</span><span className="scenario-house">Home {item.household}</span></td><td>{formatTime(item.baseline_time)}</td><td>{item.chosen_start ? formatTime(item.chosen_start) : 'No feasible window'}</td><td className="saving-cell">{formatCo2Grams(item.saving_g)}</td></tr>)}
             </tbody></table></div>
@@ -563,6 +619,37 @@ function App() {
             })}
           </tbody></table></div> : <EmptyState state={weatherView} label="Open-Meteo weather" />}
           <div className="weather-meta">{weatherPayload?.fetched_at ? `Fetched ${formatTime(weatherPayload.fetched_at, { hour: 'numeric', minute: '2-digit' })}` : 'Waiting for weather data'} · powered by Open-Meteo</div>
+        </section>
+
+        <section className="environment-grid" aria-label="Environmental monitoring">
+          <article className="panel environment-panel air-quality-panel">
+            <GlassSurface className="environment-glass" width="100%" height="100%" backgroundOpacity={0.16} displace={0.15} style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }} />
+            <div className="panel-heading"><div><div className="section-kicker">MODELED AIR QUALITY</div><h2>Air quality outlook</h2></div><button className="monitor-refresh" type="button" onClick={() => void refreshEnvironmentalData()} disabled={environmentRefreshing}>{environmentRefreshing ? 'Updating…' : 'Refresh'}</button></div>
+            {airQualityPayload && airCurrent ? <>
+              <div className="air-current-grid">
+                {[['PM2.5', 'pm2_5'], ['PM10', 'pm10'], ['NO₂', 'nitrogen_dioxide'], ['O₃', 'ozone']].map(([label, key]) => <div key={key}><span>{label}</span><strong>{typeof airCurrent[key] === 'number' ? asNumber(airCurrent[key]).toFixed(1) : '—'}<small> {asText(airUnits?.[key], 'μg/m³')}</small></strong></div>)}
+              </div>
+              <div className="environment-subheading"><strong>Next 12 hours</strong><span>Model forecast · not sensor readings</span></div>
+              <div className="table-wrap environment-table-wrap"><table className="environment-table"><thead><tr><th>TIME</th><th>PM2.5</th><th>PM10</th><th>NO₂</th><th>O₃</th></tr></thead><tbody>
+                {airRows.slice(0, 12).map((row, index) => <tr key={`${String(row.timestamp)}-${index}`}><td>{formatTime(row.timestamp)}</td>{['pm2_5', 'pm10', 'nitrogen_dioxide', 'ozone'].map((key) => <td key={key}>{typeof row[key] === 'number' ? asNumber(row[key]).toFixed(1) : '—'}</td>)}</tr>)}
+              </tbody></table></div>
+              <p className="environment-note">{asText(airQualityPayload.note)} · <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noreferrer">Open-Meteo / Copernicus CAMS</a></p>
+            </> : <EmptyState state={airQualityView} label="Air-quality forecast" />}
+          </article>
+
+          <article className="panel environment-panel water-quality-panel">
+            <GlassSurface className="environment-glass" width="100%" height="100%" backgroundOpacity={0.16} displace={0.15} style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }} />
+            <div className="panel-heading"><div><div className="section-kicker">CPCB SURFACE WATER</div><h2>Nearby sampling stations</h2></div><select aria-label="Water quality region" value={waterRegion} onChange={(event) => setWaterRegion(event.target.value)} disabled={!waterRegions.length || environmentRefreshing}>{(waterRegions.length ? waterRegions : ['West Bengal']).map((region) => <option key={region} value={region}>{region}</option>)}</select></div>
+            <p className="water-data-note">Historical manual samples in {asText(waterQualityPayload?.region, waterRegion)} · within {asNumber(waterQualityPayload?.radius_km, 100)} km</p>
+            {waterStations.length ? <div className="water-station-list">{waterStations.slice(0, 5).map((station, index) => {
+              const parameters = asList(station.parameters).filter(isRecord)
+              return <article className="water-station" key={`${String(station.station)}-${index}`}>
+                <div className="water-station-heading"><div><strong>{asText(station.station, 'CPCB station')}</strong><span>{asText(station.waterbody, asText(station.district, 'Surface water'))} · {asNumber(station.distance_km).toFixed(1)} km</span></div><time>{formatTime(station.sampled_at, { year: 'numeric', month: 'short', day: 'numeric' })}</time></div>
+                <div className="water-parameter-list">{parameters.map((parameter) => <span key={String(parameter.name)}>{asText(parameter.name)} <strong>{asNumber(parameter.value).toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong> {asText(parameter.unit)}</span>)}</div>
+              </article>
+            })}</div> : waterQualityPayload ? <div className="water-empty-note">{asText(waterQualityPayload.note, 'No nearby water samples are available.')}</div> : <EmptyState state={waterQualityView} label="CPCB water-quality data" />}
+            {waterQualityPayload && <p className="environment-note">{asText(waterQualityPayload.note)} · <a href="https://nwdp.nwic.gov.in/en/dataset/surface-water-quality-manual-chemical-parameters-cpcb" target="_blank" rel="noreferrer">National Water Data Portal · CPCB</a></p>}
+          </article>
         </section>
 
         <section className="content-grid lower-grid">
