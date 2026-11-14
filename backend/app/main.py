@@ -28,6 +28,7 @@ from app.modules.energy.location import (
     restore_location,
     weather_cache_key,
 )
+from app.modules.energy.region import resolve_indian_state
 from app.modules.energy.public_grid import get_public_grid_data
 from app.collectors.open_meteo import _fallback_payload, cached_payload, collect_weather
 from app.optimizer.service import optimize_pending
@@ -85,6 +86,14 @@ def get_location(session: Session = Depends(get_session)):
     mode = session.get(AppState, f"last_weather_mode:{cache_source}")
     source = mode.value if mode else "ESTIMATED"
     return {"location": current_location(), "weather_source": source, "timezone_source": source}
+
+
+@app.get("/api/v1/location/region")
+def get_location_region(
+    latitude: float = Query(ge=-90, le=90),
+    longitude: float = Query(ge=-180, le=180),
+):
+    return {"state": resolve_indian_state(latitude, longitude), "source": "OpenStreetMap Nominatim"}
 
 
 @app.get("/api/v1/public/grid-snapshot")

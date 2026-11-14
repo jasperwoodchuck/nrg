@@ -310,6 +310,7 @@ function App() {
   const [environmentRefreshing, setEnvironmentRefreshing] = useState(false)
   const [selectedLocationId, setSelectedLocationId] = useState<string>('kolkata')
   const [locationPoint, setLocationPoint] = useState<LocationPoint>({ latitude: 22.57, longitude: 88.36 })
+  const [customGridState, setCustomGridState] = useState<string | null>(null)
   const [mapPoint, setMapPoint] = useState<LocationPoint>({ latitude: 22.57, longitude: 88.36 })
   const [locationTimezone, setLocationTimezone] = useState('Asia/Kolkata')
   const [timezoneSource, setTimezoneSource] = useState('ESTIMATED')
@@ -359,10 +360,10 @@ function App() {
     if (!mapOpen && dialog.open) dialog.close()
   }, [mapOpen])
 
-  const refresh = useCallback(async (locationId = selectedLocationId) => {
+  const refresh = useCallback(async (locationId = selectedLocationId, stateOverride?: string | null) => {
     setRefreshing(true)
     const selectedName = locations.find((location) => location.id === locationId)?.name
-    const gridState = locationId === 'custom' ? undefined : selectedName?.split(',').at(-1)?.trim()
+    const gridState = locationId === 'custom' ? stateOverride === undefined ? customGridState : stateOverride : selectedName?.split(',').at(-1)?.trim()
     const results = await Promise.all(endpoints.map(async ({ key, path }) => {
       try {
         const endpoint = key === 'publicGrid' && gridState ? `${path}?state=${encodeURIComponent(gridState)}` : path
@@ -379,7 +380,7 @@ function App() {
     }
     setLastUpdated(new Date())
     setRefreshing(false)
-  }, [selectedLocationId, weatherMode])
+  }, [customGridState, selectedLocationId, weatherMode])
 
   const runOptimizationScenario = async () => {
     setScenarioLoading(true)
@@ -433,7 +434,14 @@ function App() {
               const savedLocation = locations.find((location) =>
                 Math.abs(location.latitude - latitude) < 0.0001 && Math.abs(location.longitude - longitude) < 0.0001,
               )
-              setSelectedLocationId(savedLocation?.id ?? 'custom')
+              if (savedLocation) {
+                setCustomGridState(null)
+                setSelectedLocationId(savedLocation.id)
+              } else {
+                const region = await getJson(`/location/region?latitude=${latitude}&longitude=${longitude}`)
+                setCustomGridState(isRecord(region) && typeof region.state === 'string' ? region.state : null)
+                setSelectedLocationId('custom')
+              }
             }
             if (typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
             if (typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
@@ -507,7 +515,7 @@ function App() {
       setScenarioResult(null)
       if (isRecord(response) && isRecord(response.location) && typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
       if (isRecord(response) && typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
-      await refresh(location.id)
+      await refresh(location.id, null)
     } catch (error) {
       setLocationError(error instanceof Error ? error.message : 'Could not update the location')
     } finally {
@@ -522,13 +530,15 @@ function App() {
       const response = await postJson('/location', mapPoint)
       setLocationPoint(mapPoint)
       setSelectedLocationId('custom')
+      const region = await getJson(`/location/region?latitude=${mapPoint.latitude}&longitude=${mapPoint.longitude}`)
+      const resolvedGridState = isRecord(region) && typeof region.state === 'string' ? region.state : null
       setScenarioResult(null)
       if (isRecord(response) && isRecord(response.location) && typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
       if (isRecord(response) && typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
       if (openDashboard) setShowDashboard(true)
       else {
         setMapOpen(false)
-        await refresh('custom')
+        await refresh('custom', resolvedGridState)
       }
     } catch (error) {
       setLocationError(error instanceof Error ? error.message : 'Could not update the location')
@@ -725,7 +735,7 @@ function App() {
             <MetricCard label={tx('ENERGY SHORTAGE')} value={formatGridValue(publicGridDaily?.energy_shortage_mu)} unit="MU" note={`${tx('Reported daily shortage')} · ${asText(publicGridDaily?.date)}`} tone="blue" icon={<DropIcon />} badge="GRID-INDIA" />
           </> : <EmptyState language={language} state={data.publicGrid} label={tx('Public grid data')} />}
         </section>
-        {publicGridPayload && <p className="public-grid-attribution">{tx('Demand:')} <a href="https://npp.gov.in/" target="_blank" rel="noreferrer">National Power Portal · MERIT</a> · {tx('Daily supply:')} <a href="https://grid-india.in/" target="_blank" rel="noreferrer">Grid-India</a> · {tx('data via')} <a href="https://www.energymap.in/developer/mcp/public" target="_blank" rel="noreferrer">India Energy Atlas</a>{selectedLocationId === 'custom' ? ' · state not resolved for this map point; showing All India data' : ''}{publicGridPayload.stale === true ? ` · ${tx('showing cached data')}` : ''}</p>}
+        {publicGridPayload && <p className="public-grid-attribution">{tx('Demand:')} <a href="https://npp.gov.in/" target="_blank" rel="noreferrer">National Power Portal · MERIT</a> · {tx('Daily supply:')} <a href="https://grid-india.in/" target="_blank" rel="noreferrer">Grid-India</a> · {tx('data via')} <a href="https://www.energymap.in/developer/mcp/public" target="_blank" rel="noreferrer">India Energy Atlas</a>{selectedLocationId === 'custom' && customGridState ? <> · Region resolved with <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a></> : selectedLocationId === 'custom' ? ` · ${tx('state not resolved for this map point; showing All India data')}` : ''}{publicGridPayload.stale === true ? ` · ${tx('showing cached data')}` : ''}</p>}
 
         <section className="panel scenario-panel" aria-labelledby="scenario-heading">
           <div className="scenario-intro">
