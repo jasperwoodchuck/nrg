@@ -120,12 +120,17 @@ def test_weather_endpoint_derives_missing_modes_from_cached_hourly_data(api_db_s
     assert daily["data"][0]["values"]["temperature_2m_mean"] == 25
 
 
-def test_only_location_and_simulator_control_routes_write(api_db_session):
+def test_expected_write_routes_are_registered(api_db_session):
     from app.main import sim_control
     result = sim_control(action="stop", session=api_db_session)
     assert result["status"] == "stop"
     write_routes = {route.path for route in app.routes if getattr(route, "methods", None) and route.methods.intersection({"POST", "PUT", "PATCH", "DELETE"}) and route.path.startswith("/api/v1/")}
-    assert write_routes == {"/api/v1/location", "/api/v1/sim/control"}
+    assert write_routes == {
+        "/api/v1/location",
+        "/api/v1/sim/control",
+        "/api/v1/scenario/run",
+        "/api/v1/mobility/estimate",
+    }
 
 
 def test_legacy_asgi_import_reexports_current_api():

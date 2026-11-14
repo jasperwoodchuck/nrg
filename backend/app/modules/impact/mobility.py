@@ -31,8 +31,8 @@ def estimate_weekly_mobility(
         "factor_source_url": FACTOR_SOURCE_URL,
         "methodology": (
             "Weekly estimate = one-way distance × 2 × commute days × mode factor. "
-            "The baseline assumes one traveler in a petrol car; car and motorbike factors "
-            "are per vehicle-km, while bus and rail factors are per passenger-km."
+            "Private vehicle scenarios assume one traveler in one vehicle; car and motorbike "
+            "factors are per vehicle-km, while bus and rail factors are per passenger-km."
         ),
         "inputs": {
             "one_way_distance_km": one_way_distance_km,
