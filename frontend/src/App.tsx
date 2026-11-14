@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import GlassSurface from './component/GlassSurface.jsx'
+import Crosshair from './component/Crosshair.jsx'
 import LocationPicker, { type LocationPoint } from './component/LocationPicker'
 import Topography from './component/Topography.jsx'
 import './App.css'
@@ -7,6 +7,33 @@ import './App.css'
 type Metric = { value: number; unit: string; source: string }
 type EndpointStatus = 'loading' | 'online' | 'error'
 type ViewState = { payload: unknown; status: EndpointStatus; error?: string }
+type ScenarioDecision = {
+  household: number
+  load: string
+  energy_kwh: number
+  duration_hours: number
+  baseline_time: string
+  chosen_start: string | null
+  saving_g: number
+  status: string
+}
+type ScenarioResult = {
+  source: string
+  forecast_source: string
+  methodology: string
+  summary: {
+    households: number
+    total_loads: number
+    loads_optimized: number
+    loads_without_window: number
+    energy_shifted_kwh: number
+    energy_consumed_kwh: number
+    baseline_co2_g: number
+    optimized_co2_g: number
+    co2_avoided_g: number
+  }
+  decisions: ScenarioDecision[]
+}
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1').replace(/\/$/, '')
 const indiaTimezone = 'Asia/Kolkata'
@@ -94,6 +121,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function parseScenarioResult(value: unknown): ScenarioResult | null {
+  if (!isRecord(value) || !isRecord(value.summary) || !Array.isArray(value.decisions)) return null
+  const summary = value.summary
+  const households = summary.households
+  const totalLoads = summary.total_loads
+  const loadsOptimized = summary.loads_optimized
+  const loadsWithoutWindow = summary.loads_without_window
+  const energyShifted = summary.energy_shifted_kwh
+  const energyConsumed = summary.energy_consumed_kwh
+  const baselineCo2 = summary.baseline_co2_g
+  const optimizedCo2 = summary.optimized_co2_g
+  const co2Avoided = summary.co2_avoided_g
+  if ([households, totalLoads, loadsOptimized, loadsWithoutWindow, energyShifted, energyConsumed, baselineCo2, optimizedCo2, co2Avoided].some((number) => typeof number !== 'number' || !Number.isFinite(number))) return null
+  if (typeof value.source !== 'string' || typeof value.forecast_source !== 'string' || typeof value.methodology !== 'string') return null
+  const decisions: ScenarioDecision[] = []
+  for (const item of value.decisions) {
+    if (!isRecord(item) || typeof item.household !== 'number' || !Number.isFinite(item.household) || typeof item.load !== 'string' || typeof item.energy_kwh !== 'number' || !Number.isFinite(item.energy_kwh) || typeof item.duration_hours !== 'number' || !Number.isFinite(item.duration_hours) || typeof item.baseline_time !== 'string' || (item.chosen_start !== null && typeof item.chosen_start !== 'string') || typeof item.saving_g !== 'number' || !Number.isFinite(item.saving_g) || typeof item.status !== 'string') return null
+    decisions.push({ household: item.household, load: item.load, energy_kwh: item.energy_kwh, duration_hours: item.duration_hours, baseline_time: item.baseline_time, chosen_start: item.chosen_start, saving_g: item.saving_g, status: item.status })
+  }
+  return {
+    source: value.source,
+    forecast_source: value.forecast_source,
+    methodology: value.methodology,
+    summary: {
+      households: Number(households),
+      total_loads: Number(totalLoads),
+      loads_optimized: Number(loadsOptimized),
+      loads_without_window: Number(loadsWithoutWindow),
+      energy_shifted_kwh: Number(energyShifted),
+      energy_consumed_kwh: Number(energyConsumed),
+      baseline_co2_g: Number(baselineCo2),
+      optimized_co2_g: Number(optimizedCo2),
+      co2_avoided_g: Number(co2Avoided),
+    },
+    decisions,
+  }
+}
+
 function asList(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
@@ -116,6 +181,10 @@ function formatMetric(value: Metric | null, digits = 1): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value.value)
 }
 
+function formatCo2Grams(grams: number): string {
+  return Math.abs(grams) >= 1000 ? `${(grams / 1000).toFixed(2)} kgCO₂` : `${grams.toFixed(0)} gCO₂`
+}
+
 function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' }): string {
   if (typeof value !== 'string') return '—'
   const date = new Date(value)
@@ -125,6 +194,10 @@ function formatTime(value: unknown, options: Intl.DateTimeFormatOptions = { hour
 function App() {
   const [showDashboard, setShowDashboard] = useState(false)
   const [data, setData] = useState<DashboardState>(initialState)
+  const [scenarioResult, setScenarioResult] = useState<ScenarioResult | null>(null)
+  const [scenarioHouseholds, setScenarioHouseholds] = useState(30)
+  const [scenarioLoading, setScenarioLoading] = useState(false)
+  const [scenarioError, setScenarioError] = useState<string | null>(null)
   const [selectedReport, setSelectedReport] = useState<Record<string, unknown> | null>(null)
   const reportDialogRef = useRef<HTMLDialogElement>(null)
   const [weatherMode, setWeatherMode] = useState<'realtime' | 'hourly' | 'daily'>('hourly')
@@ -176,6 +249,20 @@ function App() {
     setLastUpdated(new Date())
     setRefreshing(false)
   }, [weatherMode])
+
+  const runOptimizationScenario = async () => {
+    setScenarioLoading(true)
+    setScenarioError(null)
+    try {
+      const result = parseScenarioResult(await postJson('/scenario/run', { households: scenarioHouseholds }))
+      if (!result) throw new Error('The server returned an unexpected optimization result.')
+      setScenarioResult(result)
+    } catch (error) {
+      setScenarioError(error instanceof Error ? error.message : 'Could not run the optimization scenario')
+    } finally {
+      setScenarioLoading(false)
+    }
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = isDarkMode ? 'dark' : 'light'
@@ -232,6 +319,7 @@ function App() {
       setSelectedLocationId(location.id)
       setLocationPoint({ latitude: location.latitude, longitude: location.longitude })
       setMapPoint({ latitude: location.latitude, longitude: location.longitude })
+      setScenarioResult(null)
       if (isRecord(response) && isRecord(response.location) && typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
       if (isRecord(response) && typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
       await refresh()
@@ -249,6 +337,7 @@ function App() {
       const response = await postJson('/location', mapPoint)
       setLocationPoint(mapPoint)
       setSelectedLocationId('custom')
+      setScenarioResult(null)
       if (isRecord(response) && isRecord(response.location) && typeof response.location.timezone === 'string') setLocationTimezone(response.location.timezone)
       if (isRecord(response) && typeof response.timezone_source === 'string') setTimezoneSource(response.timezone_source)
       if (openDashboard) setShowDashboard(true)
@@ -306,6 +395,7 @@ function App() {
 
   return showDashboard ? (
     <main className="app-shell">
+      <Crosshair className="crosshair-overlay" color="#72c98a" opacity={0.58} thickness={1} gap={7} fade={0.25} smoothing={0.25} showCoordinates={false} targetEffect="lock" clickPulse />
       <div className="topography-backdrop" aria-hidden="true">
         <Topography
           color="#ffffff"
@@ -383,10 +473,43 @@ function App() {
           <MetricCard label="DAILY AVG. SAVING" value={formatMetric(metricValue(payload('averageSaved')))} unit="gCO₂" note="conservative baseline" tone="blue" icon={<SunIcon />} badge="ESTIMATED" />
         </section>
 
+        <section className="panel scenario-panel" aria-labelledby="scenario-heading">
+          <div className="scenario-intro">
+            <div>
+              <div className="section-kicker">GRID OPTIMIZATION SIMULATOR</div>
+              <h2 id="scenario-heading">Turn the forecast into a plan</h2>
+              <p>Compare typical appliance timing with lower-carbon windows for a virtual household fleet in {selectedLocationId === 'custom' ? 'your selected location' : locations.find((item) => item.id === selectedLocationId)?.name ?? 'your selected location'}.</p>
+            </div>
+            <div className="scenario-controls">
+              <label htmlFor="scenario-households">Virtual households</label>
+              <select id="scenario-households" value={scenarioHouseholds} disabled={scenarioLoading} onChange={(event) => setScenarioHouseholds(Number(event.target.value))}>
+                {[10, 30, 60, 100].map((count) => <option key={count} value={count}>{count} homes</option>)}
+              </select>
+              <button className="scenario-run-button" type="button" onClick={() => void runOptimizationScenario()} disabled={scenarioLoading || locationLoading}>
+                {scenarioLoading ? 'Optimizing…' : scenarioResult ? 'Run again' : 'Run optimization'}
+              </button>
+            </div>
+          </div>
+          {scenarioError && <div className="scenario-error" role="alert">{scenarioError}</div>}
+          {scenarioResult && <div className="scenario-result" aria-live="polite">
+            <div className="scenario-summary">
+              <div className="scenario-impact"><span>ESTIMATED CO₂ AVOIDED</span><strong>{formatCo2Grams(scenarioResult.summary.co2_avoided_g)}</strong><small>Typical timing → optimized timing</small></div>
+              <div><span>LOADS OPTIMIZED</span><strong>{scenarioResult.summary.loads_optimized} <small>/ {scenarioResult.summary.total_loads}</small></strong></div>
+              <div><span>ENERGY SHIFTED</span><strong>{scenarioResult.summary.energy_shifted_kwh.toFixed(1)} <small>kWh</small></strong></div>
+              <div><span>ENERGY CONSUMED</span><strong>{scenarioResult.summary.energy_consumed_kwh.toFixed(1)} <small>kWh</small></strong><small>Unchanged by scheduling</small></div>
+            </div>
+            <div className="scenario-emissions"><span>Baseline emissions <strong>{formatCo2Grams(scenarioResult.summary.baseline_co2_g)}</strong></span><span>Optimized emissions <strong>{formatCo2Grams(scenarioResult.summary.optimized_co2_g)}</strong></span><SourceBadge source={scenarioResult.source} /><SourceBadge source={scenarioResult.forecast_source} /></div>
+            <div className="scenario-decisions-heading"><strong>Sample schedule changes</strong><span>{scenarioResult.summary.households} virtual homes · {scenarioResult.summary.loads_without_window} loads had no feasible forecast window</span></div>
+            <div className="table-wrap scenario-table-wrap"><table className="scenario-table"><thead><tr><th>VIRTUAL LOAD</th><th>BASELINE TIME</th><th>OPTIMIZED TIME</th><th>CO₂ AVOIDED</th></tr></thead><tbody>
+              {scenarioResult.decisions.slice(0, 8).map((item, index) => <tr key={`${item.household}-${item.load}-${index}`}><td><span className="device-name">{formatKind(item.load)}</span><span className="scenario-house">Home {item.household}</span></td><td>{formatTime(item.baseline_time)}</td><td>{item.chosen_start ? formatTime(item.chosen_start) : 'No feasible window'}</td><td className="saving-cell">{formatCo2Grams(item.saving_g)}</td></tr>)}
+            </tbody></table></div>
+            <p className="scenario-methodology">{scenarioResult.methodology} Forecast source: {scenarioResult.forecast_source}. Simulation only; no physical devices are controlled.</p>
+          </div>}
+        </section>
+
         <section className="content-grid">
           <article className="panel forecast-panel">
-            <CardGlass />
-            <div className="panel-heading">
+              <div className="panel-heading">
               <div><div className="section-kicker">GRID CARBON FORECAST</div><h2>Cleaner hours ahead</h2></div>
               <div className="panel-heading-right"><SourceBadge source={sourceLabel} /><span className="tiny-label">NEXT 24 HOURS</span></div>
             </div>
@@ -412,8 +535,7 @@ function App() {
           </article>
 
           <article className="panel insights-panel">
-            <CardGlass />
-            <div className="panel-heading"><div><div className="section-kicker">PULSE CHECK</div><h2>Grid insights</h2></div><span className="sparkle">✳</span></div>
+              <div className="panel-heading"><div><div className="section-kicker">PULSE CHECK</div><h2>Grid insights</h2></div><span className="sparkle">✳</span></div>
             {insightRows.length ? <div className="insight-list">
               {insightRows.map((item, index) => <InsightItem key={`${String(item.type)}-${index}`} item={item} />)}
             </div> : <EmptyState state={data.insights} label="Insights" />}
@@ -426,7 +548,6 @@ function App() {
         </section>
 
         <section className="weather-panel panel" aria-labelledby="weather-heading">
-          <CardGlass />
           <div className="panel-heading">
             <div><div className="section-kicker">OPEN-METEO WEATHER</div><h2 id="weather-heading">Conditions by time scale</h2></div>
             <div className="panel-heading-right"><SourceBadge source={asText(weatherPayload?.source, 'ESTIMATED')} /><span className="tiny-label">{asText(weatherPayload?.resolution, weatherMode)}</span></div>
@@ -446,8 +567,7 @@ function App() {
 
         <section className="content-grid lower-grid">
           <article className="panel schedule-panel">
-            <CardGlass />
-            <div className="panel-heading"><div><div className="section-kicker">AUTOMATED LOAD SHIFTING</div><h2>Schedule decisions</h2></div><span className="count-chip">{scheduleRows.length} decisions</span></div>
+              <div className="panel-heading"><div><div className="section-kicker">AUTOMATED LOAD SHIFTING</div><h2>Schedule decisions</h2></div><span className="count-chip">{scheduleRows.length} decisions</span></div>
             {scheduleRows.length ? <div className="table-wrap"><table><thead><tr><th>VIRTUAL LOAD</th><th>BASELINE TIME</th><th>CHOSEN WINDOW</th><th>CARBON SAVED</th></tr></thead><tbody>
               {scheduleRows.slice(0, 6).map((item, index) => {
                 const window = isRecord(item.chosen_window) ? item.chosen_window : null
@@ -458,8 +578,7 @@ function App() {
           </article>
 
           <article className="panel fleet-panel">
-            <CardGlass />
-            <div className="panel-heading"><div><div className="section-kicker">SIMULATED HOUSEHOLDS</div><h2>Flexible fleet</h2></div><span className="count-chip">{loadRows.length} devices</span></div>
+              <div className="panel-heading"><div><div className="section-kicker">SIMULATED HOUSEHOLDS</div><h2>Flexible fleet</h2></div><span className="count-chip">{loadRows.length} devices</span></div>
             {loadRows.length ? <div className="fleet-list">{loadRows.slice(0, 7).map((item, index) => <div className="fleet-row" key={`${String(item.id)}-${index}`}>
               <span className="device-icon fleet-device"><DeviceIcon kind={asText(item.kind)} /></span><div className="fleet-main"><strong>{formatKind(item.kind)}</strong><span>Home {asNumber(item.household)}</span></div><div className="fleet-meta"><strong>{asNumber(item.energy_kwh).toFixed(1)} <small>kWh</small></strong><span className={`tag tag-${asText(item.status, 'pending').toLowerCase()}`}>{asText(item.status, 'pending')}</span></div>
             </div>)}</div> : <EmptyState state={data.loads} label="Virtual fleet" />}
@@ -469,13 +588,11 @@ function App() {
 
         <section className="content-grid report-grid">
           <article className="panel report-panel">
-            <CardGlass />
-            <div className="panel-heading"><div><div className="section-kicker">DAILY AUTOGENERATED BRIEF</div><h2>Latest report</h2></div><span className="report-mark"><ReportIcon /></span></div>
+              <div className="panel-heading"><div><div className="section-kicker">DAILY AUTOGENERATED BRIEF</div><h2>Latest report</h2></div><span className="report-mark"><ReportIcon /></span></div>
             {latestReport ? <><p className="report-copy">{asText(latestReport.body, 'Report is empty.')}</p><div className="report-meta"><span>{formatTime(latestReport.created_at, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span><SourceBadge source={asText(latestReport.source, 'SIMULATED')} /></div></> : <EmptyState state={data.latestReport} label="Latest report" />}
           </article>
           <article className="panel report-history-panel">
-            <CardGlass />
-            <div className="panel-heading"><div><div className="section-kicker">REPORT ARCHIVE</div><h2>Recent reports</h2></div><span className="count-chip">{reportsRows.length} reports</span></div>
+              <div className="panel-heading"><div><div className="section-kicker">REPORT ARCHIVE</div><h2>Recent reports</h2></div><span className="count-chip">{reportsRows.length} reports</span></div>
             {reportsRows.length ? <div className="report-history">{reportsRows.slice(0, 4).map((item, index) => <button className="history-row" type="button" key={`${String(item.created_at)}-${index}`} aria-label={`Open report from ${formatTime(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`} onClick={() => setSelectedReport(item)}><span className="history-icon"><ReportIcon /></span><div><strong>{formatTime(item.created_at, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</strong><span>{asText(item.body, 'Daily grid summary')}</span></div><span className="history-arrow" aria-hidden="true">↗</span></button>)}</div> : <EmptyState state={data.reports} label="Reports" />}
           </article>
         </section>
@@ -522,11 +639,7 @@ function App() {
 }
 
 function MetricCard({ label, value, unit, note, tone, icon, badge }: { label: string; value: string; unit: string; note: string; tone: string; icon: ReactNode; badge: string }) {
-  return <article className={`metric-card metric-${tone}`}><CardGlass /><div className="metric-card-top"><span>{label}</span><span className="metric-icon">{icon}</span></div><div className="metric-value">{value}<small>{unit}</small></div><div className="metric-bottom"><span>{note}</span><SourceBadge source={badge} /></div></article>
-}
-
-function CardGlass() {
-  return <GlassSurface className="liquid-glass-layer" width="100%" height="100%" borderRadius={10} backgroundOpacity={0.12} displace={0.35} />
+  return <article className={`metric-card metric-${tone}`}><div className="metric-card-top"><span>{label}</span><span className="metric-icon">{icon}</span></div><div className="metric-value">{value}<small>{unit}</small></div><div className="metric-bottom"><span>{note}</span><SourceBadge source={badge} /></div></article>
 }
 
 function InsightItem({ item }: { item: Record<string, unknown> }) {

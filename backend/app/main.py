@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -26,10 +27,15 @@ from app.modules.energy.location import (
 )
 from app.collectors.open_meteo import _fallback_payload, cached_payload, collect_weather
 from app.optimizer.service import optimize_pending
+from app.optimizer.scenario import run_scenario
 from app.scheduler import jobs
 
 logging.basicConfig(level=logging.INFO)
 scheduler = BackgroundScheduler(timezone="UTC")
+
+
+class ScenarioInput(BaseModel):
+    households: int = Field(default=30, ge=1, le=100)
 
 
 @asynccontextmanager
@@ -142,6 +148,18 @@ def forecast(session: Session = Depends(get_session)):
     lowest = sorted(rows, key=lambda row: row.intensity)[:max(1, len(rows) // 8)]
     chosen = {row.timestamp for row in lowest}
     return {"source": rows[0].source if rows else "ESTIMATED", "factor_set_version": FACTOR_SET_VERSION, "forecast": [{"timestamp": row.timestamp.isoformat(), "intensity_gco2_kwh": row.intensity, "source": row.source, "weather": json.loads(row.weather_json), "low_carbon_window": row.timestamp in chosen} for row in rows]}
+
+
+@app.post("/api/v1/scenario/run")
+def run_optimization_scenario(request: ScenarioInput, session: Session = Depends(get_session)):
+    now = datetime.now(timezone.utc)
+    rows = list(session.scalars(select(ForecastRecord).where(ForecastRecord.timestamp >= now).order_by(ForecastRecord.timestamp).limit(72)))
+    if not rows:
+        raise HTTPException(503, "No upcoming forecast is available. Refresh the forecast and try again.")
+    try:
+        return run_scenario([{"timestamp": row.timestamp, "intensity": row.intensity, "source": row.source} for row in rows], request.households)
+    except ValueError as error:
+        raise HTTPException(503, str(error)) from error
 
 
 @app.get("/api/v1/weather")

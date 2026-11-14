@@ -5,6 +5,7 @@ Routes are read-only JSON except the location selector and demo operator control
 - `GET /api/v1/impact/summary?range=24h|7d|30d`: headline CO2, percent vs both baselines, completed load count, shifted kWh, and methodology.
 - `GET /api/v1/impact/metrics/{key}?range=...`: `co2_saved`, `co2_saved_baseline_b`, `kwh_shifted`, or `loads_optimized`; each includes `value`, `unit`, `inputs`, `factor_set_version`, `source`, `formula_id`, and `computed_at`.
 - `GET /api/v1/forecast`: up to 72 forecast hours, intensity source, weather inputs, and low-carbon flags.
+- `POST /api/v1/scenario/run` with `{"households": 30}`: returns an in-memory virtual-fleet schedule comparison against typical appliance timing, with baseline/optimized emissions, shifted energy, and per-load decisions. `households` must be between 1 and 100. The simulation does not modify stored loads or control physical devices; it returns 503 when no upcoming forecast is available.
 - `GET /api/v1/weather?mode=realtime|hourly|daily`: cached Open-Meteo current/15-minute, hourly, or daily weather series for the selected location. The response includes a source badge, resolution, timezone, units, and fetch time. `mode` defaults to `hourly`.
 - `GET /api/v1/schedule`: simulated load decisions, baseline, selected window, savings, and reason.
 - `GET /api/v1/loads`: virtual fleet and status.
